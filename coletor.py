@@ -146,82 +146,139 @@ def adaptador_superbid(paginas=3):
     return lotes
 
 
-# Copart: filtros fixos (motos, 2016 a 2027, condição FINANCIAMENTO) e uma busca
-# por pátio. O número do pátio é o #PhysicalYardNo da URL do site. Parâmetros de
-# rastreio (gclid, gbraid, _gl) removidos.
+# Copart: motos de 2016 a 2027 com condição FINANCIAMENTO. Uma busca por pátio
+# (o número do pátio é o #PhysicalYardNo da URL do site) e uma busca em todos
+# os pátios do Brasil (número None). Parâmetros de rastreio removidos.
 PATIOS_COPART = {
     "EMBÚ DAS ARTES - SP": 2,
-    # Neste formato novo da Copart o pátio é filtrado pelo NOME, e o link usado traz
-    # "Motor dá partida". ATENÇÃO: este link NÃO tem o filtro de financiamento,
-    # então os lotes dele não são necessariamente de financiamento.
-    # (o valor pode ser o número do pátio ou a URL completa da busca)
-    "ITAQUAQUECETUBA - SP": (
-        "https://www.copart.com.br/search/motos/?displayStr=Motos&from=%2FvehicleFinder"
-        "&searchCriteria=%7B%22query%22:%5B%22*%22%5D,%22filter%22:%7B%22MISC%22:"
-        "%5B%22categoria:Motos%22%5D,%22categoria%22:%5B%22categoria:%5C%22Motos%5C%22%22%5D,"
-        "%22condicaofuncionamento%22:%5B%22condicaofuncionamento:%5C%22Motor%20d%C3%A1%20partida%5C%22%22%5D,"
-        "%22patioveiculo%22:%5B%22patioveiculo:%5C%22Itaquaquecetuba%20-%20SP%5C%22%22%5D%7D,"
-        "%22sort%22:%5B%22auction_date_utc%20asc%22,%22brazil_default_sort%20asc%22%5D,"
-        "%22watchListOnly%22:false,%22searchName%22:%22%22,%22freeFormSearch%22:false%7D"
-    ),
+    "ITAQUAQUECETUBA - SP": 46,
+    "TODOS OS PÁTIOS": None,
 }
+
+# Condições da Copart que indicam sinistro (o painel descarta esses lotes).
+SINISTRO = ("COLISÃO", "ROUBO/FURTO", "ENCHENTE", "QUEIMADO", "SINISTRADO")
+
+JS_BUSCA = """async ([url, corpo]) => {
+  const r = await fetch(url, {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: corpo});
+  return await r.json();
+}"""
 
 
 def url_copart(nome, numero):
     from urllib.parse import quote
+    patio = f",%22%23PhysicalYardNo:{numero}%22" if numero is not None else ""
     return (
         "https://www.copart.com.br/vehicleFinderSearch/?searchStr="
         "%7B%22MISC%22:%5B%22categoria:Motos%22,%22%23LotYear:%5B2016%20TO%202027%5D%22,"
-        "%22condicao:%5C%22FINANCIAMENTO%5C%22%22,"
-        f"%22%23PhysicalYardNo:{numero}%22%5D,"
-        "%22sortByZip%22:false,%22buyerEnteredZip%22:null,%22milesAway%22:null%7D%20"
+        "%22condicao:%5C%22FINANCIAMENTO%5C%22%22"
+        + patio +
+        "%5D,%22sortByZip%22:false,%22buyerEnteredZip%22:null,%22milesAway%22:null%7D%20"
         "&displayStr=Motos,%5B2016%20TO%202027%5D,FINANCIAMENTO," + quote(nome)
     )
 
 
-def adaptador_copart():
-    """Copart. A página também é montada por JavaScript. Como a URL já filtra
-    condicao:FINANCIAMENTO, todo lote retornado é de financiamento (o painel
-    reconhece a palavra na descrição).
+def converter_lote_copart(c):
+    """Converte um lote da Copart para o formato do painel.
+    Campos da Copart: mkn=marca, lm=modelo, lcy=ano, hb=maior lance,
+    la=valor de referência, lossType=condição, sellerName=vendedor, yn=pátio,
+    ad=data do leilão. (hb e la: confira com o site na primeira vez.)"""
+    perda = (c.get("lossType") or "").upper()
+    dica = " (sinistro)" if perda in SINISTRO else ""
+    ano = str(c.get("lcy") or "")
+    num = str(c.get("lotNumberStr") or "")
+    return {
+        "leiloeiro": "Copart",
+        "lote": num,
+        "titulo": f'{c.get("mkn", "")} {c.get("lm", "")}'.strip(),
+        "ano": int(ano) if ano.isdigit() else 0,
+        "km": None,
+        "lance": float(c.get("hb") or 0),
+        "fipe": float(c.get("la") or 0),
+        "comitente": c.get("sellerName") or "",
+        "descricao": (f'Condição: {perda}{dica}. Documento: {c.get("td", "")}. '
+                      f'Dano: {c.get("damageClassification", "")}. '
+                      f'Funcionamento: {c.get("drivabilityRating", "")}.'),
+        "local": c.get("yn") or c.get("syn") or "",
+        "data_leilao": (c.get("ad") or "")[:10],
+        "url": "https://www.copart.com.br/lot/" + num,  # confira se o link abre
+    }
 
-    PASSO 1 (este): abre a página e grava em copart_debug.json as respostas JSON
-    que o site recebe, para mapearmos os campos (modelo, ano, km, lance...).
-    PASSO 2: com esse arquivo em mãos, converter cada lote para o formato do
-    painel e devolver a lista."""
+
+def adaptador_copart(max_paginas=5):
+    """Copart. A página é montada por JavaScript e os lotes chegam por uma busca
+    interna (/public/lots/search). Abrimos a página, lemos essa resposta e, se
+    houver mais lotes do que cabem numa página, pedimos as próximas."""
     from playwright.sync_api import sync_playwright
 
-    respostas = []
+    def eh_busca(url):
+        return "/public/lots/search" in url or "/public/vehicleFinder/search" in url
+
+    respostas, pedidos, lotes, vistos = [], [], [], set()
     with sync_playwright() as p:
         nav = p.chromium.launch(headless=True)
         pg = nav.new_page(user_agent=HEADERS["User-Agent"])
 
-        def captura(r):
-            tipo = r.headers.get("content-type") or ""
-            if "json" in tipo and "copart" in r.url:
+        def ao_pedir(r):
+            if eh_busca(r.url) and r.post_data:
+                pedidos.append((r.url, r.post_data))
+
+        def ao_responder(r):
+            if eh_busca(r.url):
                 try:
-                    respostas.append({"url": r.url, "dados": r.json()})
+                    respostas.append(r.json())
                 except Exception:
                     pass
 
-        pg.on("response", captura)
+        pg.on("request", ao_pedir)
+        pg.on("response", ao_responder)
+
         for nome, numero in PATIOS_COPART.items():
-            if numero is None:
-                print(f"[copart] pátio {nome}: número não definido, pulando")
-                continue
-            url = numero if isinstance(numero, str) else url_copart(nome, numero)
+            respostas.clear()
+            pedidos.clear()
             try:
-                abrir(pg, url, "copart_" + re.sub(r"\W+", "_", nome))
+                abrir(pg, url_copart(nome, numero),
+                      "copart_" + re.sub(r"\W+", "_", nome))
             except Exception as erro:
                 print(f"[copart] {nome}: {erro}")
-            time.sleep(PAUSA)
+                continue
+            if not respostas:
+                print(f"[copart] {nome}: nenhuma resposta de busca recebida")
+                continue
+            dados = respostas[-1].get("data", {})
+            resultado = dados.get("results", {})
+            conteudo = list(resultado.get("content", []))
+            total = resultado.get("totalElements", 0)
+            DIAG[-1]["total_copart"] = total
+            RESPOSTAS_COPART.append({"patio": nome, "total": total,
+                                     "query": dados.get("query")})
+            if pedidos and total > len(conteudo):
+                url_busca, corpo = pedidos[-1]
+                try:
+                    corpo = json.loads(corpo)
+                    tam = corpo.get("size") or 20
+                    for pagina in range(1, min(max_paginas, -(-total // tam))):
+                        corpo["page"] = pagina
+                        corpo["start"] = pagina * tam
+                        r = pg.evaluate(JS_BUSCA, [url_busca, json.dumps(corpo)])
+                        conteudo += r["data"]["results"]["content"]
+                        time.sleep(PAUSA)
+                except Exception as erro:
+                    print(f"[copart] {nome}: só a primeira página ({erro})")
+            for c in conteudo:
+                chave = c.get("lotNumberStr")
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                lotes.append(converter_lote_copart(c))
+            print(f"[copart] {nome}: {len(conteudo)} lotes lidos de {total}")
         nav.close()
-    RESPOSTAS_COPART.extend(respostas)
-    print(f"[copart] {len(respostas)} respostas JSON recebidas")
-    return []
+    return lotes
 
 
 ADAPTADORES = [
-    adaptador_superbid,
+    # adaptador_superbid,  # desativado: a Superbid mostra "Just a moment..." (verificação
+    #                      # anti-robô da Cloudflare) e não entrega a lista ao coletor.
     adaptador_copart,
     # adaptador_exemplo,   # modelo para os demais leiloeiros
 ]
