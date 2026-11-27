@@ -43,6 +43,26 @@ def baixar(url):
 
 
 # ---------------------------------------------------------------- adaptadores
+DIAG = []              # diagnóstico de cada página aberta (vai para copart_debug.json)
+RESPOSTAS_COPART = []  # respostas JSON recebidas pela página da Copart
+
+
+def abrir(pg, url, nome):
+    """Abre a página sem esperar a rede 'parar' (sites com anúncios e rastreadores
+    nunca param, e isso causava o erro de timeout) e registra o que apareceu,
+    para sabermos se a página carregou ou se o site bloqueou o robô."""
+    info = {"nome": nome, "url": url}
+    DIAG.append(info)
+    try:
+        pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+        pg.wait_for_timeout(8000)
+        info["titulo"] = pg.title()
+        info["texto"] = pg.inner_text("body")[:800]
+    except Exception as erro:
+        info["erro"] = str(erro)[:300]
+        raise
+
+
 def adaptador_exemplo():
     """Modelo a copiar para cada leiloeiro. Troque a URL e os seletores."""
     url = "https://www.exemplo-leiloeiro.com.br/motos"  # <- URL real da listagem
@@ -85,8 +105,8 @@ def adaptador_superbid(paginas=3):
         nav = p.chromium.launch(headless=True)
         pg = nav.new_page(user_agent=HEADERS["User-Agent"])
         for n in range(1, paginas + 1):
-            pg.goto(URL_SUPERBID.replace("pageNumber=1", f"pageNumber={n}"),
-                    wait_until="networkidle")
+            abrir(pg, URL_SUPERBID.replace("pageNumber=1", f"pageNumber={n}"),
+                  f"superbid_pagina_{n}")
             try:
                 pg.wait_for_selector("a[href*='/oferta/']", timeout=20000)
             except Exception:
@@ -189,12 +209,14 @@ def adaptador_copart():
                 print(f"[copart] pátio {nome}: número não definido, pulando")
                 continue
             url = numero if isinstance(numero, str) else url_copart(nome, numero)
-            pg.goto(url, wait_until="networkidle")
+            try:
+                abrir(pg, url, "copart_" + re.sub(r"\W+", "_", nome))
+            except Exception as erro:
+                print(f"[copart] {nome}: {erro}")
             time.sleep(PAUSA)
         nav.close()
-    with open("copart_debug.json", "w", encoding="utf-8") as f:
-        json.dump(respostas, f, ensure_ascii=False, indent=2)
-    print(f"[copart] {len(respostas)} respostas gravadas em copart_debug.json")
+    RESPOSTAS_COPART.extend(respostas)
+    print(f"[copart] {len(respostas)} respostas JSON recebidas")
     return []
 
 
@@ -221,6 +243,9 @@ def main():
         except Exception as erro:  # um site fora do ar não derruba os demais
             print(f"[aviso] {adaptador.__name__}: {erro}")
     todos = enriquecer_fipe(todos)
+    with open("copart_debug.json", "w", encoding="utf-8") as f:
+        json.dump({"diagnostico": DIAG, "respostas_copart": RESPOSTAS_COPART},
+                  f, ensure_ascii=False, indent=2)
     with open("lotes.json", "w", encoding="utf-8") as f:
         json.dump(todos, f, ensure_ascii=False, indent=2)
     print(f"{len(todos)} lotes salvos em lotes.json")
