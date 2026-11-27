@@ -195,7 +195,6 @@
     }
 
     function parseSuperbidTexto(texto) {
-      // Remove textos invisíveis de acessibilidade de ícones antes de processar
       const linhas = texto
         .replace(/Ícone[^\n\r]*/gi, "")
         .split(/\r?\n/)
@@ -203,6 +202,8 @@
         .filter(l => l && l !== "-");
 
       const encontrados = [];
+      const regexCabecalhoCard = /^(\d+\s+pra[çc]as\s*\||Pra[çc]a\s+[ÚU]nica\s*\||\d{2}\/\d{2}\s+-\s+\d{2}:\d{2}$)/i;
+      const regexCidadeUF = /([A-ZÀ-Ú][a-zà-ú]+(?:\s+(?:de|da|do|dos|das|[A-ZÀ-Ú][a-zà-ú]+))*\s*-\s*[A-Z]{2})(?:\s*-\s*[A-Z]{2})?$/;
 
       for (let i = 0; i < linhas.length; i++) {
         const mLote = linhas[i].match(/^Lote\s+(\d+)$/i);
@@ -216,13 +217,13 @@
         // Ignora sucatas, peças e itens que não são motos
         if (/^(SUCATA|PE[ÇC]AS|[ÓO]RG[ÃA]O|KIT\b|VESTU[ÁA]RIO)/i.test(linhaTituloRaw)) continue;
 
-        // Separa cidade colada no fim do título (ex: "...2024/2024Boituva - SP" ou "...vermelhaBarretos - SP")
+        // 1. Tenta separar cidade colada no fim da linha do título
         let tituloComAno = linhaTituloRaw;
         let local = "";
-        const mCidadeUF = linhaTituloRaw.match(/([A-ZÀ-Ú][a-zà-ú]+(?:\s+(?:de|da|do|dos|das|[A-ZÀ-Ú][a-zà-ú]+))*\s*-\s*[A-Z]{2})(?:\s*-\s*[A-Z]{2})?$/);
-        if (mCidadeUF) {
-          local = mCidadeUF[1].replace(/\s*-\s*/, " - ").trim();
-          tituloComAno = linhaTituloRaw.slice(0, mCidadeUF.index).trim();
+        const mCidadeColada = linhaTituloRaw.match(regexCidadeUF);
+        if (mCidadeColada) {
+          local = mCidadeColada[1].replace(/\s*-\s*/, " - ").trim();
+          tituloComAno = linhaTituloRaw.slice(0, mCidadeColada.index).trim();
         } else {
           const mCidadeSemUF = linhaTituloRaw.match(/(São José do Rio Preto|Campo Mourão)$/i);
           if (mCidadeSemUF) {
@@ -231,26 +232,30 @@
           }
         }
 
-        // Lê até as próximas linhas deste cartão parando rigorosamente antes do próximo lote
+        // 2. Coleta linhas exclusivas deste card até o início do próximo lote/card
         const bloco = [];
-        for (let j = i + 2; j < Math.min(linhas.length, i + 9); j++) {
-          if (/^Lote\s+\d+$/i.test(linhas[j])) {
-            // A linha anterior (j - 1) pertence ao cabeçalho de data do próximo lote
-            if (bloco.length > 0) bloco.pop();
-            break;
-          }
-          if (/^Perguntas e respostas/i.test(linhas[j])) break;
-          bloco.push(linhas[j]);
-        }
+        for (let j = i + 2; j < Math.min(linhas.length, i + 10); j++) {
+          const atual = linhas[j];
+          const proxima = j + 1 < linhas.length ? linhas[j + 1] : "";
+          if (/^Lote\s+\d+$/i.test(atual) || /^Lote\s+\d+$/i.test(proxima)) break;
+          if (regexCabecalhoCard.test(atual) || /^Perguntas e respostas/i.test(atual)) break;
 
-        // Se a cidade veio na linha seguinte ao título, captura também
-        if (!local && bloco.length > 0 && /^[A-ZÀ-Ú][a-zà-ú\s]+-\s*[A-Z]{2}$/.test(bloco[0])) {
-          local = bloco.shift();
+          // Se a cidade estiver na linha seguinte (ex: "Laranjal Paulista - SP"), captura e não duplica no bloco
+          if (!local && regexCidadeUF.test(atual)) {
+            local = atual.match(regexCidadeUF)[1].replace(/\s*-\s*/, " - ").trim();
+            continue;
+          }
+          if (!local && /^(São José do Rio Preto|Campo Mourão)$/i.test(atual)) {
+            local = atual;
+            continue;
+          }
+
+          if (!bloco.includes(atual)) bloco.push(atual);
         }
 
         const blocoStr = [linhaData, tituloComAno, ...bloco].join(" | ");
 
-        // Extrai ano (2024/2024 ou 05/05 ou 2002)
+        // Extrai ano (2024/2024, 05/05 ou 2002)
         let ano = 0;
         const mAno4 = blocoStr.match(/\b(199\d|20[0-2]\d)(?:\/(199\d|20[0-2]\d))?\b/);
         if (mAno4) {
@@ -263,12 +268,12 @@
           }
         }
 
-        // Extrai todos os valores em R$ do bloco (se houver 2 praças, pega o menor como lance atual)
+        // Extrai valores em R$ do bloco
         const valores = Array.from(blocoStr.matchAll(/R\$\s*([\d\.]+)(?:,(\d{2}))?/g))
           .map(m => parseFloat(m[1].replace(/\./g, "") + "." + (m[2] || "00")));
         const lance = valores.length ? Math.min(...valores) : 0;
 
-        // Extrai data do leilão (DD/MM -> AAAA-MM-DD)
+        // Extrai data do leilão
         let dataLeilao = "";
         const mData = linhaData.match(/(\d{2})\/(\d{2})/);
         if (mData) {
@@ -307,7 +312,6 @@
       return encontrados;
     }
 
-    // Consulta a Tabela FIPE pública (Parallelum) para lotes sem valor FIPE (como Superbid)
     async function preencherFipeSuperbid(lista) {
       try {
         const respMarcas = await fetch("https://parallelum.com.br/fipe/api/v1/motos/marcas");
@@ -383,9 +387,7 @@
           localStorage.setItem("moto_leilao_superbid", JSON.stringify(lotesSuperbid));
           consolidarLotes("sincronizado + Superbid (FIPE atualizada)");
         }
-      } catch (e) {
-        // Silencia erro caso a API externa esteja indisponível
-      }
+      } catch (e) {}
     }
 
     async function importarSuperbid() {
