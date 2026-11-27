@@ -19,7 +19,18 @@
     button, .file-btn { background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500; }
     button:hover, .file-btn:hover { border-color: var(--accent); }
     button.primary { background: var(--accent); color: #0f172a; border-color: var(--accent); font-weight: 600; }
+    button.superbid-btn { background: rgba(34, 197, 94, 0.15); color: var(--green); border-color: rgba(34, 197, 94, 0.4); font-weight: 600; }
+    button.superbid-btn:hover { background: rgba(34, 197, 94, 0.25); }
     input[type="file"] { display: none; }
+
+    /* Caixa de importação da Superbid */
+    .caixa-superbid { display: none; background: var(--card); border: 1px solid var(--accent); border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+    .caixa-superbid.aberta { display: block; }
+    .caixa-superbid h3 { margin: 0 0 6px; font-size: 1rem; color: var(--accent); }
+    .caixa-superbid p { margin: 0 0 10px; font-size: 0.85rem; color: var(--muted); }
+    .caixa-superbid textarea { width: 100%; height: 130px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-size: 0.85rem; resize: vertical; margin-bottom: 10px; }
+    .caixa-superbid-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
     .fontes { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 0.85rem; }
     .fontes a { color: var(--accent); text-decoration: none; background: rgba(56, 189, 248, 0.1); padding: 4px 10px; border-radius: 4px; }
     .fontes a:hover { text-decoration: underline; }
@@ -63,10 +74,22 @@
         <div class="subtitle" id="status-carga">Buscando lotes.json automático...</div>
       </div>
       <div class="actions">
+        <button class="superbid-btn" onclick="alternarCaixaSuperbid()">+ Colar Superbid</button>
         <button class="primary" onclick="carregarAutomatico()">Atualizar agora</button>
         <label class="file-btn">Carregar lotes.json manual<input type="file" accept=".json" onchange="lerArquivoManual(event)" /></label>
       </div>
     </header>
+
+    <div class="caixa-superbid" id="caixa-superbid">
+      <h3>Importar listagem da Superbid</h3>
+      <p>Abra a busca da Superbid, aperte <strong>Ctrl+A</strong> e <strong>Ctrl+C</strong> na página inteira, cole aqui abaixo e clique em Importar.</p>
+      <textarea id="texto-superbid" placeholder="Cole aqui o texto copiado da página da Superbid..."></textarea>
+      <div class="caixa-superbid-actions">
+        <button class="primary" onclick="importarSuperbid()">Importar motos</button>
+        <button onclick="limparSuperbid()">Limpar salvos da Superbid</button>
+        <button onclick="alternarCaixaSuperbid()">Fechar</button>
+      </div>
+    </div>
 
     <div class="fontes">
       <strong>Buscas diretas:</strong>
@@ -115,14 +138,20 @@
   </div>
 
   <script>
+    let lotesBase = [];
+    let lotesSuperbid = JSON.parse(localStorage.getItem("moto_leilao_superbid") || "[]");
     let lotes = [];
     let marcacoes = JSON.parse(localStorage.getItem("moto_leilao_marcacoes") || "{}");
 
     function chaveLote(l) { return l.url || `${l.leiloeiro}-${l.lote}`; }
 
+    function alternarCaixaSuperbid() {
+      document.getElementById("caixa-superbid").classList.toggle("aberta");
+    }
+
     function extrairEstado(local) {
       if (!local) return "";
-      const match = local.match(/-\s*([A-Z]{2})\b/i) || local.match(/\b([A-Z]{2})$/i);
+      const match = local.match(/[-\/]\s*([A-Z]{2})\b/i) || local.match(/\b([A-Z]{2})$/i);
       return match ? match[1].toUpperCase() : "";
     }
 
@@ -133,11 +162,11 @@
     }
 
     function detectarOrigem(l) {
-      if (l.origem) return l.origem;
+      if (l.origem && l.origem !== "indefinida") return l.origem;
       const texto = `${l.comitente || ""} ${l.descricao || ""} ${l.titulo || ""}`.toLowerCase();
-      if (/sinistro|colis[aã]o|roubo|furto|enchente|pequena monta|m[eé]dia monta|grande monta|sucata/.test(texto)) return "sinistro";
-      if (/financiamento|retomada|banco|aliena[cç][aã]o|financeira|cons[oó]rcio/.test(texto)) return "financiamento";
-      return "indefinida";
+      if (/sinistro|colis[aã]o|roubo|furto|enchente|pequena monta|m[eé]dia monta|grande monta|sucata|seguradora|porto seguro|azul|allianz|tokio|bradesco auto|liberty|mapfre/.test(texto)) return "sinistro";
+      if (/financiamento|retomada|banco|aliena[cç][aã]o|financeira|cons[oó]rcio|bv|santander|ita[uú]|bradesco financ|pan|aymor[eé]|omni|daycoval/.test(texto)) return "financiamento";
+      return l.origem || "indefinida";
     }
 
     function calcularNota(l, origem) {
@@ -163,6 +192,84 @@
       marcacoes[chave][campo] = !marcacoes[chave][campo];
       localStorage.setItem("moto_leilao_marcacoes", JSON.stringify(marcacoes));
       renderizar();
+    }
+
+    function parseSuperbidTexto(texto) {
+      const linhas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const encontrados = [];
+      const regexMarcas = /^(HONDA|YAMAHA|SUZUKI|KAWASAKI|BMW|TRIUMPH|DAFRA|HAOJUE|SHINERAY|ROYAL ENFIELD|HARLEY|DUCATI|KTM|AVELLOZ|BAJAJ|VOLTZ)\b/i;
+
+      for (let i = 0; i < linhas.length; i++) {
+        if (!regexMarcas.test(linhas[i])) continue;
+
+        const tituloRaw = linhas[i];
+        const bloco = linhas.slice(Math.max(0, i - 3), Math.min(linhas.length, i + 12));
+        const blocoTexto = bloco.join(" | ");
+
+        // Extrair ano (ex: 2022/2023 ou 2023)
+        const anoMatch = blocoTexto.match(/\b(201[6-9]|202[0-7])(?:\/(201[6-9]|202[0-7]))?\b/);
+        const ano = anoMatch ? parseInt(anoMatch[2] || anoMatch[1], 10) : 0;
+
+        // Extrair valor do lance (R$ 12.500,00 ou R$ 12.500)
+        const valorMatch = blocoTexto.match(/R\$\s*([\d\.]+)(?:,\d{2})?/);
+        const lance = valorMatch ? parseFloat(valorMatch[1].replace(/\./g, "")) : 0;
+
+        // Extrair lote
+        const loteMatch = blocoTexto.match(/Lote[:\s#]*(\d+)/i);
+        const numLote = loteMatch ? loteMatch[1] : `SB-${encontrados.length + 1}`;
+
+        // Extrair cidade/UF
+        const localMatch = blocoTexto.match(/([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]+[-\/]\s*[A-Z]{2})\b/);
+        const local = localMatch ? localMatch[1].trim() : "São Paulo - SP";
+
+        // Extrair data (DD/MM/AAAA)
+        const dataMatch = blocoTexto.match(/\b(\d{2})\/(\d{2})\/(202\d)\b/);
+        const dataLeilao = dataMatch ? `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}` : "";
+
+        // Limpar título removendo ano colado
+        const tituloLimpo = tituloRaw.replace(/\b201[6-9](?:\/20[12]\d)?\b|\b202[0-7](?:\/202[0-7])?\b/g, "").replace(/\s+/g, " ").trim();
+
+        const origem = detectarOrigem({ titulo: tituloLimpo, descricao: blocoTexto, comitente: blocoTexto });
+
+        encontrados.push({
+          leiloeiro: "Superbid",
+          lote: numLote,
+          titulo: tituloLimpo,
+          ano: ano,
+          km: 0,
+          lance: lance,
+          fipe: 0,
+          comitente: origem === "financiamento" ? "Banco / Financeira (Superbid)" : "Ver no lote Superbid",
+          descricao: bloco.slice(0, 6).join(" • "),
+          origem: origem,
+          local: local,
+          data_leilao: dataLeilao,
+          url: `https://www.superbid.net/busca?searchTerm=${encodeURIComponent(tituloLimpo)}`
+        });
+      }
+      return encontrados;
+    }
+
+    function importarSuperbid() {
+      const txt = document.getElementById("texto-superbid").value;
+      if (!txt.trim()) { alert("Cole o texto da página da Superbid primeiro."); return; }
+      const novos = parseSuperbidTexto(txt);
+      if (!novos.length) {
+        alert("Não consegui identificar motos nesse texto. Certifique-se de apertar Ctrl+A e Ctrl+C na página da Superbid com a lista de motos visível.");
+        return;
+      }
+      lotesSuperbid = novos;
+      localStorage.setItem("moto_leilao_superbid", JSON.stringify(lotesSuperbid));
+      document.getElementById("texto-superbid").value = "";
+      document.getElementById("caixa-superbid").classList.remove("aberta");
+      consolidarLotes("sincronizado + Superbid");
+      alert(`${novos.length} motos importadas da Superbid!`);
+    }
+
+    function limparSuperbid() {
+      lotesSuperbid = [];
+      localStorage.removeItem("moto_leilao_superbid");
+      consolidarLotes("sincronizado com GitHub");
     }
 
     function popularFiltros() {
@@ -200,17 +307,22 @@
       renderizar();
     }
 
-    function processarDados(dados, fonteTexto) {
-      const lista = Array.isArray(dados) ? dados : (dados.lotes || []);
-      lotes = lista.map(l => {
+    function consolidarLotes(fonteTexto) {
+      const combinados = [...lotesBase, ...lotesSuperbid];
+      lotes = combinados.map(l => {
         const origem = detectarOrigem(l);
         const estado = extrairEstado(l.local);
         return { ...l, origem, estado, nota: calcularNota(l, origem) };
       }).sort((a, b) => b.nota - a.nota);
-      localStorage.setItem("moto_leilao_dados", JSON.stringify(lotes));
       document.getElementById("status-carga").textContent = `${lotes.length} lotes carregados (${fonteTexto})`;
       popularFiltros();
       renderizar();
+    }
+
+    function processarDados(dados, fonteTexto) {
+      lotesBase = Array.isArray(dados) ? dados : (dados.lotes || []);
+      localStorage.setItem("moto_leilao_dados", JSON.stringify(lotesBase));
+      consolidarLotes(lotesSuperbid.length ? `${fonteTexto} + ${lotesSuperbid.length} Superbid` : fonteTexto);
     }
 
     async function carregarAutomatico() {
@@ -223,10 +335,10 @@
       } catch (e) {
         const cache = localStorage.getItem("moto_leilao_dados");
         if (cache) {
-          lotes = JSON.parse(cache);
-          status.textContent = `Usando dados salvos no navegador (${lotes.length} lotes)`;
-          popularFiltros();
-          renderizar();
+          lotesBase = JSON.parse(cache);
+          consolidarLotes("dados salvos no navegador");
+        } else if (lotesSuperbid.length) {
+          consolidarLotes("apenas Superbid importada");
         } else {
           status.textContent = "Nenhum lotes.json encontrado ainda.";
         }
@@ -271,7 +383,7 @@
       const grid = document.getElementById("grid");
 
       if (!filtrados.length) {
-        grid.innerHTML = `<div class="aviso">Nenhuma moto encontrada com os filtros atuais.</div>`;
+        grid.innerHTML = `<div class="aviso">Nenhuma moto encontrada com os filtros atuais. (Dica: lotes da Superbid sem banco explícito no texto podem ficar como "Indefinida" — desmarque "Apenas financiamento" para vê-los).</div>`;
         return;
       }
 
