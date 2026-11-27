@@ -23,7 +23,6 @@
     button.superbid-btn:hover { background: rgba(34, 197, 94, 0.25); }
     input[type="file"] { display: none; }
 
-    /* Caixa de importação da Superbid */
     .caixa-superbid { display: none; background: var(--card); border: 1px solid var(--accent); border-radius: 10px; padding: 16px; margin-bottom: 18px; }
     .caixa-superbid.aberta { display: block; }
     .caixa-superbid h3 { margin: 0 0 6px; font-size: 1rem; color: var(--accent); }
@@ -82,7 +81,7 @@
 
     <div class="caixa-superbid" id="caixa-superbid">
       <h3>Importar listagem da Superbid</h3>
-      <p>Abra a busca da Superbid, aperte <strong>Ctrl+A</strong> e <strong>Ctrl+C</strong> na página inteira, cole aqui abaixo e clique em Importar.</p>
+      <p>Abra a busca da Superbid, aperte <strong>Ctrl+A</strong> e <strong>Ctrl+C</strong> na página inteira, cole aqui abaixo e clique em Importar. (Sucatas e peças são ignoradas automaticamente).</p>
       <textarea id="texto-superbid" placeholder="Cole aqui o texto copiado da página da Superbid..."></textarea>
       <div class="caixa-superbid-actions">
         <button class="primary" onclick="importarSuperbid()">Importar motos</button>
@@ -125,7 +124,7 @@
           <input type="text" id="busca" placeholder="Lote, banco, pátio..." oninput="renderizar()" />
         </div>
         <div class="filtros-check">
-          <label><input type="checkbox" id="so-financiamento" checked onchange="renderizar()" /> Apenas financiamento</label>
+          <label><input type="checkbox" id="so-financiamento" checked onchange="renderizar()" /> Ocultar sinistros (Copart)</label>
           <label><input type="checkbox" id="so-historico" onchange="renderizar()" /> Histórico conferido</label>
           <label><input type="checkbox" id="so-seguro" onchange="renderizar()" /> Seguro aceito</label>
         </div>
@@ -177,7 +176,8 @@
         const desc = ((l.fipe - l.lance) / l.fipe) * 100;
         nota += Math.min(25, Math.round(desc * 0.6));
       }
-      if (l.ano >= 2022) nota += 5;
+      if (l.ano >= 2022) nota += 10;
+      else if (l.ano >= 2016) nota += 5;
       if (l.km > 0 && l.km < 25000) nota += 5;
       if ((l.descricao || "").toLowerCase().includes("motor dá partida e engrena")) nota += 5;
       return Math.max(0, Math.min(100, nota));
@@ -197,54 +197,95 @@
     function parseSuperbidTexto(texto) {
       const linhas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       const encontrados = [];
-      const regexMarcas = /^(HONDA|YAMAHA|SUZUKI|KAWASAKI|BMW|TRIUMPH|DAFRA|HAOJUE|SHINERAY|ROYAL ENFIELD|HARLEY|DUCATI|KTM|AVELLOZ|BAJAJ|VOLTZ)\b/i;
 
       for (let i = 0; i < linhas.length; i++) {
-        if (!regexMarcas.test(linhas[i])) continue;
+        const mLote = linhas[i].match(/^Lote\s+(\d+)$/i);
+        if (!mLote) continue;
 
-        const tituloRaw = linhas[i];
-        const bloco = linhas.slice(Math.max(0, i - 3), Math.min(linhas.length, i + 12));
-        const blocoTexto = bloco.join(" | ");
+        const numLote = mLote[1];
+        const linhaData = i > 0 ? linhas[i - 1] : "";
+        const linhaTituloRaw = i + 1 < linhas.length ? linhas[i + 1] : "";
+        if (!linhaTituloRaw) continue;
 
-        // Extrair ano (ex: 2022/2023 ou 2023)
-        const anoMatch = blocoTexto.match(/\b(201[6-9]|202[0-7])(?:\/(201[6-9]|202[0-7]))?\b/);
-        const ano = anoMatch ? parseInt(anoMatch[2] || anoMatch[1], 10) : 0;
+        // Ignora sucatas, peças e itens que não são motos
+        if (/^(SUCATA|PE[ÇC]AS|[ÓO]RG[ÃA]O|KIT\b|VESTU[ÁA]RIO)/i.test(linhaTituloRaw)) continue;
 
-        // Extrair valor do lance (R$ 12.500,00 ou R$ 12.500)
-        const valorMatch = blocoTexto.match(/R\$\s*([\d\.]+)(?:,\d{2})?/);
-        const lance = valorMatch ? parseFloat(valorMatch[1].replace(/\./g, "")) : 0;
+        // Separa cidade colada no fim do título (ex: "...2024/2024Boituva - SP" ou "...2002Tupã - SP")
+        let tituloComAno = linhaTituloRaw;
+        let local = "";
+        const mCidadeUF = linhaTituloRaw.match(/([A-ZÀ-Ú][a-zà-ú]+(?:\s+(?:de|da|do|dos|das|[A-ZÀ-Ú][a-zà-ú]+))*\s*-\s*[A-Z]{2})(?:\s*-\s*[A-Z]{2})?$/);
+        if (mCidadeUF) {
+          local = mCidadeUF[1].replace(/\s*-\s*/, " - ").trim();
+          tituloComAno = linhaTituloRaw.slice(0, mCidadeUF.index).trim();
+        } else {
+          const mCidadeSemUF = linhaTituloRaw.match(/(São José do Rio Preto|Campo Mourão)$/i);
+          if (mCidadeSemUF) {
+            local = mCidadeSemUF[1];
+            tituloComAno = linhaTituloRaw.slice(0, mCidadeSemUF.index).trim();
+          }
+        }
 
-        // Extrair lote
-        const loteMatch = blocoTexto.match(/Lote[:\s#]*(\d+)/i);
-        const numLote = loteMatch ? loteMatch[1] : `SB-${encontrados.length + 1}`;
+        // Lê até as próximas 6 linhas deste cartão para pegar ano, praças e valores
+        const bloco = [];
+        for (let j = i + 2; j < Math.min(linhas.length, i + 9); j++) {
+          if (/^Lote\s+\d+$/i.test(linhas[j]) || /^\d+\s+pra[çc]as|^Pra[çc]a\s+[ÚU]nica|^\d{2}\/\d{2}\s+-\s+\d{2}:\d{2}$/i.test(linhas[j])) break;
+          bloco.push(linhas[j]);
+        }
+        const blocoStr = [linhaData, tituloComAno, ...bloco].join(" | ");
 
-        // Extrair cidade/UF
-        const localMatch = blocoTexto.match(/([A-ZÀ-Ú][a-zà-úA-ZÀ-Ú\s]+[-\/]\s*[A-Z]{2})\b/);
-        const local = localMatch ? localMatch[1].trim() : "São Paulo - SP";
+        // Extrai ano (2024/2024 ou 09/09 ou 2002)
+        let ano = 0;
+        const mAno4 = blocoStr.match(/\b(199\d|20[0-2]\d)(?:\/(199\d|20[0-2]\d))?\b/);
+        if (mAno4) {
+          ano = parseInt(mAno4[2] || mAno4[1], 10);
+        } else {
+          const mAno2 = blocoStr.match(/\b(\d{2})\/(\d{2})\b/);
+          if (mAno2 && !blocoStr.includes(mAno2[0] + " -")) {
+            const yy = parseInt(mAno2[2], 10);
+            ano = yy <= 30 ? 2000 + yy : 1900 + yy;
+          }
+        }
 
-        // Extrair data (DD/MM/AAAA)
-        const dataMatch = blocoTexto.match(/\b(\d{2})\/(\d{2})\/(202\d)\b/);
-        const dataLeilao = dataMatch ? `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}` : "";
+        // Extrai todos os valores em R$ do bloco (se houver 2 praças, pega o menor/2ª praça como lance inicial)
+        const valores = Array.from(blocoStr.matchAll(/R\$\s*([\d\.]+)(?:,(\d{2}))?/g))
+          .map(m => parseFloat(m[1].replace(/\./g, "") + "." + (m[2] || "00")));
+        const lance = valores.length ? Math.min(...valores) : 0;
+        const refPraca1 = valores.length > 1 ? Math.max(...valores) : 0;
 
-        // Limpar título removendo ano colado
-        const tituloLimpo = tituloRaw.replace(/\b201[6-9](?:\/20[12]\d)?\b|\b202[0-7](?:\/202[0-7])?\b/g, "").replace(/\s+/g, " ").trim();
+        // Extrai data do leilão (DD/MM -> AAAA-MM-DD)
+        let dataLeilao = "";
+        const mData = linhaData.match(/(\d{2})\/(\d{2})/);
+        if (mData) {
+          const mes = parseInt(mData[2], 10);
+          const anoData = mes < 6 ? 2027 : 2026;
+          dataLeilao = `${anoData}-${mData[2]}-${mData[1]}`;
+        }
 
-        const origem = detectarOrigem({ titulo: tituloLimpo, descricao: blocoTexto, comitente: blocoTexto });
+        // Limpa o título deixando apenas Marca e Modelo
+        const tituloLimpo = tituloComAno
+          .replace(/^MOTOCICLETA\s+/i, "")
+          .replace(/^Uma Motocicleta\s+/i, "")
+          .replace(/,?\s*\b(199\d|20[0-2]\d)(?:\/(199\d|20[0-2]\d))?\b.*$/i, "")
+          .replace(/,?\s*\b\d{2}\/\d{2}\b.*$/i, "")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const origem = detectarOrigem({ titulo: tituloLimpo, descricao: blocoStr, comitente: "" });
 
         encontrados.push({
           leiloeiro: "Superbid",
           lote: numLote,
-          titulo: tituloLimpo,
+          titulo: tituloLimpo || tituloComAno,
           ano: ano,
           km: 0,
           lance: lance,
-          fipe: 0,
-          comitente: origem === "financiamento" ? "Banco / Financeira (Superbid)" : "Ver no lote Superbid",
-          descricao: bloco.slice(0, 6).join(" • "),
+          fipe: refPraca1,
+          comitente: "Superbid Exchange (ver edital do lote)",
+          descricao: [linhaData, ...bloco].filter(Boolean).join(" • "),
           origem: origem,
-          local: local,
+          local: local || "Brasil",
           data_leilao: dataLeilao,
-          url: `https://www.superbid.net/busca?searchTerm=${encodeURIComponent(tituloLimpo)}`
+          url: `https://www.superbid.net/busca?searchTerm=${encodeURIComponent(tituloLimpo || numLote)}`
         });
       }
       return encontrados;
@@ -255,7 +296,7 @@
       if (!txt.trim()) { alert("Cole o texto da página da Superbid primeiro."); return; }
       const novos = parseSuperbidTexto(txt);
       if (!novos.length) {
-        alert("Não consegui identificar motos nesse texto. Certifique-se de apertar Ctrl+A e Ctrl+C na página da Superbid com a lista de motos visível.");
+        alert("Nenhuma moto válida encontrada no texto colado.");
         return;
       }
       lotesSuperbid = novos;
@@ -263,7 +304,7 @@
       document.getElementById("texto-superbid").value = "";
       document.getElementById("caixa-superbid").classList.remove("aberta");
       consolidarLotes("sincronizado + Superbid");
-      alert(`${novos.length} motos importadas da Superbid!`);
+      alert(`${novos.length} motos válidas importadas da Superbid (sucatas ignoradas)!`);
     }
 
     function limparSuperbid() {
@@ -372,7 +413,8 @@
         if (estadoFiltro && l.estado !== estadoFiltro) return false;
         if (modeloFiltro && (l.titulo || "").trim() !== modeloFiltro) return false;
         if (dataFiltro && l.data_leilao !== dataFiltro) return false;
-        if (soFin && l.origem !== "financiamento") return false;
+        if (soFin && l.origem === "sinistro") return false;
+        if (soFin && l.leiloeiro === "Copart" && l.origem !== "financiamento") return false;
         if (soHist && !m.historico) return false;
         if (soSeg && !m.seguro) return false;
         if (texto && !`${l.titulo} ${l.local} ${l.comitente} ${l.descricao} ${l.leiloeiro} ${l.lote}`.toLowerCase().includes(texto)) return false;
@@ -383,7 +425,7 @@
       const grid = document.getElementById("grid");
 
       if (!filtrados.length) {
-        grid.innerHTML = `<div class="aviso">Nenhuma moto encontrada com os filtros atuais. (Dica: lotes da Superbid sem banco explícito no texto podem ficar como "Indefinida" — desmarque "Apenas financiamento" para vê-los).</div>`;
+        grid.innerHTML = `<div class="aviso">Nenhuma moto encontrada com os filtros atuais.</div>`;
         return;
       }
 
@@ -391,6 +433,7 @@
         const ch = chaveLote(l);
         const m = marcacoes[ch] || {};
         const descFipe = (l.fipe > 0 && l.lance > 0 && l.lance < l.fipe) ? ` (-${Math.round(((l.fipe - l.lance) / l.fipe) * 100)}%)` : "";
+        const labelRef = l.leiloeiro === "Superbid" ? "1ª Praça / Ref." : "Ref. / FIPE";
         return `
           <div class="card">
             <div>
@@ -410,7 +453,7 @@
             <div>
               <div class="valores">
                 <span>Lance atual<strong>${formatarMoeda(l.lance)}${descFipe}</strong></span>
-                <span>Ref. / FIPE<strong>${formatarMoeda(l.fipe)}</strong></span>
+                <span>${labelRef}<strong>${formatarMoeda(l.fipe)}</strong></span>
               </div>
               <div class="checks">
                 <label><input type="checkbox" ${m.historico ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'historico')" /> Histórico conferido (sem leilão/sinistro)</label>
