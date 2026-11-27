@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moto de Leilão - Financiamento</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    h1 { margin: 0; font-size: 1.5rem; }
+    .subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button, .file-btn {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500;
+    }
+    button:hover, .file-btn:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); color: #0f172a; border-color: var(--accent); font-weight: 600; }
+    input[type="file"] { display: none; }
+
+    .fontes { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 0.85rem; }
+    .fontes a { color: var(--accent); text-decoration: none; background: rgba(56, 189, 248, 0.1); padding: 4px 10px; border-radius: 4px; }
+    .fontes a:hover { text-decoration: underline; }
+
+    .filtros { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: var(--card); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 20px; font-size: 0.88rem; }
+    .filtros label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .filtros input[type="text"] { background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 6px 10px; border-radius: 4px; min-width: 240px; }
+
+    .stats { color: var(--muted); font-size: 0.85rem; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; gap: 12px; }
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 99px; font-weight: 600; text-transform: uppercase; }
+    .badge.financiamento { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+    .badge.sinistro { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+    .badge.indefinida { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+    .nota { background: var(--bg); border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 0.9rem; color: var(--accent); }
+    .titulo { font-size: 1.05rem; font-weight: 700; margin: 6px 0 4px; }
+    .meta { color: var(--muted); font-size: 0.83rem; line-height: 1.45; }
+    .desc { font-size: 0.8rem; color: #cbd5e1; background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; margin-top: 8px; line-height: 1.35; }
+    .valores { display: flex; justify-content: space-between; background: var(--bg); padding: 10px; border-radius: 6px; font-size: 0.85rem; }
+    .valores span strong { display: block; font-size: 1rem; margin-top: 2px; }
+    .checks { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; font-size: 0.85rem; }
+    .checks label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    .btn-lote { display: inline-block; text-align: center; width: 100%; background: rgba(56, 189, 248, 0.15); color: var(--accent); text-decoration: none; padding: 8px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; margin-top: 10px; }
+    .btn-lote:hover { background: rgba(56, 189, 248, 0.25); }
+    .aviso { text-align: center; padding: 40px; color: var(--muted); background: var(--card); border-radius: 10px; border: 1px dashed var(--border); grid-column: 1 / -1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Painel Moto de Leilão</h1>
+        <div class="subtitle" id="status-carga">Buscando lotes.json automático...</div>
+      </div>
+      <div class="actions">
+        <button class="primary" onclick="carregarAutomatico()">Atualizar agora</button>
+        <label class="file-btn">
+          Carregar lotes.json manual
+          <input type="file" accept=".json" onchange="lerArquivoManual(event)" />
+        </label>
+      </div>
+    </header>
+
+    <div class="fontes">
+      <strong>Buscas diretas:</strong>
+      <a href="https://www.superbid.net/categorias/carros-motos/motos/motocicletas/sao-paulo-sp?searchType=opened&pageNumber=1&pageSize=30&orderBy=score:desc" target="_blank">Superbid (Motos SP)</a>
+      <a href="https://www.copart.com.br/vehicleFinderSearch/?searchStr=%7B%22MISC%22:%5B%22categoria:Motos%22,%22%23LotYear:%5B2016%20TO%202027%5D%22,%22condicao:%5C%22FINANCIAMENTO%5C%22%22,%22%23PhysicalYardNo:2%22%5D%7D" target="_blank">Copart Embu (Financiamento)</a>
+      <a href="https://www.copart.com.br/vehicleFinderSearch/?searchStr=%7B%22MISC%22:%5B%22categoria:Motos%22,%22%23LotYear:%5B2016%20TO%202027%5D%22,%22condicao:%5C%22FINANCIAMENTO%5C%22%22,%22%23PhysicalYardNo:46%22%5D%7D" target="_blank">Copart Itaquaquecetuba (Financiamento)</a>
+    </div>
+
+    <div class="filtros">
+      <input type="text" id="busca" placeholder="Filtrar modelo, estado (SP, GO), banco..." oninput="renderizar()" />
+      <label><input type="checkbox" id="so-financiamento" checked onchange="renderizar()" /> Apenas financiamento</label>
+      <label><input type="checkbox" id="so-historico" onchange="renderizar()" /> Histórico conferido</label>
+      <label><input type="checkbox" id="so-seguro" onchange="renderizar()" /> Seguro aceito</label>
+    </div>
+
+    <div class="stats" id="stats"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <script>
+    let lotes = [];
+    let marcacoes = JSON.parse(localStorage.getItem("moto_leilao_marcacoes") || "{}");
+
+    function chaveLote(l) {
+      return l.url || `${l.leiloeiro}-${l.lote}`;
+    }
+
+    function detectarOrigem(l) {
+      if (l.origem) return l.origem;
+      const texto = `${l.comitente || ""} ${l.descricao || ""} ${l.titulo || ""}`.toLowerCase();
+      if (/sinistro|colis[aã]o|roubo|furto|enchente|pequena monta|m[eé]dia monta|grande monta|sucata/.test(texto)) {
+        return "sinistro";
+      }
+      if (/financiamento|retomada|banco|aliena[cç][aã]o|financeira|cons[oó]rcio/.test(texto)) {
+        return "financiamento";
+      }
+      return "indefinida";
+    }
+
+    function calcularNota(l, origem) {
+      let nota = 50;
+      if (origem === "financiamento") nota += 20;
+      if (origem === "sinistro") nota -= 50;
+      if (l.fipe > 0 && l.lance > 0 && l.lance < l.fipe) {
+        const desc = ((l.fipe - l.lance) / l.fipe) * 100;
+        nota += Math.min(25, Math.round(desc * 0.6));
+      }
+      if (l.ano >= 2022) nota += 5;
+      if (l.km > 0 && l.km < 25000) nota += 5;
+      if ((l.descricao || "").toLowerCase().includes("motor dá partida e engrena")) nota += 5;
+      return Math.max(0, Math.min(100, nota));
+    }
+
+    function formatarMoeda(v) {
+      if (!v || v <= 0) return "—";
+      return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+    }
+
+    function alternarMarcacao(chave, campo) {
+      if (!marcacoes[chave]) marcacoes[chave] = {};
+      marcacoes[chave][campo] = !marcacoes[chave][campo];
+      localStorage.setItem("moto_leilao_marcacoes", JSON.stringify(marcacoes));
+      renderizar();
+    }
+
+    function processarDados(dados, fonteTexto) {
+      const lista = Array.isArray(dados) ? dados : (dados.lotes || []);
+      lotes = lista.map(l => {
+        const origem = detectarOrigem(l);
+        return { ...l, origem, nota: calcularNota(l, origem) };
+      }).sort((a, b) => b.nota - a.nota);
+      localStorage.setItem("moto_leilao_dados", JSON.stringify(lotes));
+      document.getElementById("status-carga").textContent = `${lotes.length} lotes carregados (${fonteTexto})`;
+      renderizar();
+    }
+
+    async function carregarAutomatico() {
+      const status = document.getElementById("status-carga");
+      status.textContent = "Carregando lotes.json do repositório...";
+      try {
+        const resp = await fetch("./lotes.json?t=" + Date.now());
+        if (!resp.ok) throw new Error("Arquivo não encontrado");
+        const dados = await resp.json();
+        processarDados(dados, "sincronizado com GitHub");
+      } catch (e) {
+        const cache = localStorage.getItem("moto_leilao_dados");
+        if (cache) {
+          lotes = JSON.parse(cache);
+          status.textContent = `Usando dados salvos no navegador (${lotes.length} lotes)`;
+          renderizar();
+        } else {
+          status.textContent = "Nenhum lotes.json encontrado ainda.";
+        }
+      }
+    }
+
+    function lerArquivoManual(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          processarDados(JSON.parse(e.target.result), "arquivo manual");
+        } catch {
+          alert("Arquivo JSON inválido.");
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function renderizar() {
+      const texto = document.getElementById("busca").value.toLowerCase();
+      const soFin = document.getElementById("so-financiamento").checked;
+      const soHist = document.getElementById("so-historico").checked;
+      const soSeg = document.getElementById("so-seguro").checked;
+
+      const filtrados = lotes.filter(l => {
+        const ch = chaveLote(l);
+        const m = marcacoes[ch] || {};
+        if (soFin && l.origem !== "financiamento") return false;
+        if (soHist && !m.historico) return false;
+        if (soSeg && !m.seguro) return false;
+        if (texto) {
+          const alvo = `${l.titulo} ${l.local} ${l.comitente} ${l.descricao} ${l.leiloeiro} ${l.lote}`.toLowerCase();
+          if (!alvo.includes(texto)) return false;
+        }
+        return true;
+      });
+
+      document.getElementById("stats").textContent = `Mostrando ${filtrados.length} de ${lotes.length} motos`;
+      const grid = document.getElementById("grid");
+
+      if (!filtrados.length) {
+        grid.innerHTML = `<div class="aviso">Nenhuma moto encontrada com os filtros atuais.</div>`;
+        return;
+      }
+
+      grid.innerHTML = filtrados.map(l => {
+        const ch = chaveLote(l);
+        const m = marcacoes[ch] || {};
+        const descFipe = (l.fipe > 0 && l.lance > 0 && l.lance < l.fipe)
+          ? ` (-${Math.round(((l.fipe - l.lance) / l.fipe) * 100)}%)`
+          : "";
+        return `
+          <div class="card">
+            <div>
+              <div class="card-top">
+                <span class="badge ${l.origem}">${l.origem}</span>
+                <span class="nota">Nota ${l.nota}</span>
+              </div>
+              <div class="titulo">${l.titulo || "Moto sem título"} (${l.ano || "—"})</div>
+              <div class="meta">
+                <strong>${l.leiloeiro}</strong> • Lote ${l.lote}<br>
+                Pátio: <strong>${l.local || "—"}</strong> • Data: ${l.data_leilao || "—"}<br>
+                KM: ${l.km ? l.km.toLocaleString("pt-BR") + " km" : "Não informado"}<br>
+                Comitente: ${l.comitente || "Não informado"}
+              </div>
+              ${l.descricao ? `<div class="desc">${l.descricao}</div>` : ""}
+            </div>
+            <div>
+              <div class="valores">
+                <span>Lance atual<strong>${formatarMoeda(l.lance)}${descFipe}</strong></span>
+                <span>Ref. / FIPE<strong>${formatarMoeda(l.fipe)}</strong></span>
+              </div>
+              <div class="checks">
+                <label><input type="checkbox" ${m.historico ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'historico')" /> Histórico conferido (sem leilão/sinistro)</label>
+                <label><input type="checkbox" ${m.seguro ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'seguro')" /> Seguro aceito na cotação</label>
+              </div>
+              <a class="btn-lote" href="${l.url}" target="_blank">Abrir lote no leiloeiro ↗</a>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    carregarAutomatico();
+  </script>
+</body>
+</html>
