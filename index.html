@@ -81,7 +81,7 @@
 
     <div class="caixa-superbid" id="caixa-superbid">
       <h3>Importar listagem da Superbid</h3>
-      <p>Abra a busca da Superbid, aperte <strong>Ctrl+A</strong> e <strong>Ctrl+C</strong> na página inteira, cole aqui abaixo e clique em Importar. (Sucatas e peças são ignoradas automaticamente).</p>
+      <p>Abra a busca da Superbid, aperte <strong>Ctrl+A</strong> e <strong>Ctrl+C</strong> na página inteira, cole aqui abaixo e clique em Importar. (Sucatas e peças são ignoradas e a tabela FIPE é consultada automaticamente).</p>
       <textarea id="texto-superbid" placeholder="Cole aqui o texto copiado da página da Superbid..."></textarea>
       <div class="caixa-superbid-actions">
         <button class="primary" onclick="importarSuperbid()">Importar motos</button>
@@ -195,7 +195,13 @@
     }
 
     function parseSuperbidTexto(texto) {
-      const linhas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      // Remove textos invisíveis de acessibilidade de ícones antes de processar
+      const linhas = texto
+        .replace(/Ícone[^\n\r]*/gi, "")
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => l && l !== "-");
+
       const encontrados = [];
 
       for (let i = 0; i < linhas.length; i++) {
@@ -210,7 +216,7 @@
         // Ignora sucatas, peças e itens que não são motos
         if (/^(SUCATA|PE[ÇC]AS|[ÓO]RG[ÃA]O|KIT\b|VESTU[ÁA]RIO)/i.test(linhaTituloRaw)) continue;
 
-        // Separa cidade colada no fim do título (ex: "...2024/2024Boituva - SP" ou "...2002Tupã - SP")
+        // Separa cidade colada no fim do título (ex: "...2024/2024Boituva - SP" ou "...vermelhaBarretos - SP")
         let tituloComAno = linhaTituloRaw;
         let local = "";
         const mCidadeUF = linhaTituloRaw.match(/([A-ZÀ-Ú][a-zà-ú]+(?:\s+(?:de|da|do|dos|das|[A-ZÀ-Ú][a-zà-ú]+))*\s*-\s*[A-Z]{2})(?:\s*-\s*[A-Z]{2})?$/);
@@ -225,15 +231,26 @@
           }
         }
 
-        // Lê até as próximas 6 linhas deste cartão para pegar ano, praças e valores
+        // Lê até as próximas linhas deste cartão parando rigorosamente antes do próximo lote
         const bloco = [];
         for (let j = i + 2; j < Math.min(linhas.length, i + 9); j++) {
-          if (/^Lote\s+\d+$/i.test(linhas[j]) || /^\d+\s+pra[çc]as|^Pra[çc]a\s+[ÚU]nica|^\d{2}\/\d{2}\s+-\s+\d{2}:\d{2}$/i.test(linhas[j])) break;
+          if (/^Lote\s+\d+$/i.test(linhas[j])) {
+            // A linha anterior (j - 1) pertence ao cabeçalho de data do próximo lote
+            if (bloco.length > 0) bloco.pop();
+            break;
+          }
+          if (/^Perguntas e respostas/i.test(linhas[j])) break;
           bloco.push(linhas[j]);
         }
+
+        // Se a cidade veio na linha seguinte ao título, captura também
+        if (!local && bloco.length > 0 && /^[A-ZÀ-Ú][a-zà-ú\s]+-\s*[A-Z]{2}$/.test(bloco[0])) {
+          local = bloco.shift();
+        }
+
         const blocoStr = [linhaData, tituloComAno, ...bloco].join(" | ");
 
-        // Extrai ano (2024/2024 ou 09/09 ou 2002)
+        // Extrai ano (2024/2024 ou 05/05 ou 2002)
         let ano = 0;
         const mAno4 = blocoStr.match(/\b(199\d|20[0-2]\d)(?:\/(199\d|20[0-2]\d))?\b/);
         if (mAno4) {
@@ -246,11 +263,10 @@
           }
         }
 
-        // Extrai todos os valores em R$ do bloco (se houver 2 praças, pega o menor/2ª praça como lance inicial)
+        // Extrai todos os valores em R$ do bloco (se houver 2 praças, pega o menor como lance atual)
         const valores = Array.from(blocoStr.matchAll(/R\$\s*([\d\.]+)(?:,(\d{2}))?/g))
           .map(m => parseFloat(m[1].replace(/\./g, "") + "." + (m[2] || "00")));
         const lance = valores.length ? Math.min(...valores) : 0;
-        const refPraca1 = valores.length > 1 ? Math.max(...valores) : 0;
 
         // Extrai data do leilão (DD/MM -> AAAA-MM-DD)
         let dataLeilao = "";
@@ -279,7 +295,7 @@
           ano: ano,
           km: 0,
           lance: lance,
-          fipe: refPraca1,
+          fipe: 0,
           comitente: "Superbid Exchange (ver edital do lote)",
           descricao: [linhaData, ...bloco].filter(Boolean).join(" • "),
           origem: origem,
@@ -291,7 +307,88 @@
       return encontrados;
     }
 
-    function importarSuperbid() {
+    // Consulta a Tabela FIPE pública (Parallelum) para lotes sem valor FIPE (como Superbid)
+    async function preencherFipeSuperbid(lista) {
+      try {
+        const respMarcas = await fetch("https://parallelum.com.br/fipe/api/v1/motos/marcas");
+        if (!respMarcas.ok) return;
+        const marcas = await respMarcas.json();
+
+        const mapaMarcas = {
+          "HONDA": "honda", "YAMAHA": "yamaha", "SUZUKI": "suzuki",
+          "KAWASAKI": "kawasaki", "BMW": "bmw", "SHINERAY": "shineray",
+          "DAFRA": "dafra", "HAOJUE": "haojue", "TRIUMPH": "triumph",
+          "ROYAL ENFIELD": "royal enfield", "BAJAJ": "bajaj", "SUNDOWN": "sundown"
+        };
+
+        const cacheModelosMarca = {};
+        let atualizouAlgo = false;
+
+        for (const item of lista) {
+          if (item.fipe > 0 || !item.ano) continue;
+          const tituloUpper = item.titulo.toUpperCase();
+          const chaveMarca = Object.keys(mapaMarcas).find(m => tituloUpper.includes(m));
+          if (!chaveMarca) continue;
+
+          const marcaObj = marcas.find(m => m.nome.toLowerCase().includes(mapaMarcas[chaveMarca]));
+          if (!marcaObj) continue;
+
+          if (!cacheModelosMarca[marcaObj.codigo]) {
+            const rMod = await fetch(`https://parallelum.com.br/fipe/api/v1/motos/marcas/${marcaObj.codigo}/modelos`);
+            if (rMod.ok) {
+              const dMod = await rMod.json();
+              cacheModelosMarca[marcaObj.codigo] = dMod.modelos || [];
+            }
+          }
+
+          const modelos = cacheModelosMarca[marcaObj.codigo] || [];
+          const palavras = tituloUpper.replace(chaveMarca, "").replace(/[^A-Z0-9\s]/g, " ").split(/\s+/).filter(p => p.length >= 2);
+          if (!palavras.length) continue;
+
+          let melhorModelo = null;
+          let maiorScore = 0;
+          for (const mod of modelos) {
+            const nomeMod = mod.nome.toUpperCase();
+            let score = 0;
+            for (const p of palavras) {
+              if (nomeMod.includes(p)) score += p.length;
+            }
+            if (score > maiorScore) {
+              maiorScore = score;
+              melhorModelo = mod;
+            }
+          }
+
+          if (!melhorModelo || maiorScore < 3) continue;
+
+          const rAnos = await fetch(`https://parallelum.com.br/fipe/api/v1/motos/marcas/${marcaObj.codigo}/modelos/${melhorModelo.codigo}/anos`);
+          if (!rAnos.ok) continue;
+          const anos = await rAnos.json();
+          const anoObj = anos.find(a => a.codigo.startsWith(String(item.ano)));
+          if (!anoObj) continue;
+
+          const rValor = await fetch(`https://parallelum.com.br/fipe/api/v1/motos/marcas/${marcaObj.codigo}/modelos/${melhorModelo.codigo}/anos/${anoObj.codigo}`);
+          if (!rValor.ok) continue;
+          const dValor = await rValor.json();
+          if (dValor && dValor.Valor) {
+            const num = parseFloat(dValor.Valor.replace("R$", "").replace(/\./g, "").replace(",", ".").trim());
+            if (num > 0) {
+              item.fipe = num;
+              atualizouAlgo = true;
+            }
+          }
+        }
+
+        if (atualizouAlgo) {
+          localStorage.setItem("moto_leilao_superbid", JSON.stringify(lotesSuperbid));
+          consolidarLotes("sincronizado + Superbid (FIPE atualizada)");
+        }
+      } catch (e) {
+        // Silencia erro caso a API externa esteja indisponível
+      }
+    }
+
+    async function importarSuperbid() {
       const txt = document.getElementById("texto-superbid").value;
       if (!txt.trim()) { alert("Cole o texto da página da Superbid primeiro."); return; }
       const novos = parseSuperbidTexto(txt);
@@ -303,8 +400,8 @@
       localStorage.setItem("moto_leilao_superbid", JSON.stringify(lotesSuperbid));
       document.getElementById("texto-superbid").value = "";
       document.getElementById("caixa-superbid").classList.remove("aberta");
-      consolidarLotes("sincronizado + Superbid");
-      alert(`${novos.length} motos válidas importadas da Superbid (sucatas ignoradas)!`);
+      consolidarLotes("sincronizado + Superbid (consultando FIPE...)");
+      await preencherFipeSuperbid(lotesSuperbid);
     }
 
     function limparSuperbid() {
@@ -364,6 +461,9 @@
       lotesBase = Array.isArray(dados) ? dados : (dados.lotes || []);
       localStorage.setItem("moto_leilao_dados", JSON.stringify(lotesBase));
       consolidarLotes(lotesSuperbid.length ? `${fonteTexto} + ${lotesSuperbid.length} Superbid` : fonteTexto);
+      if (lotesSuperbid.some(item => !item.fipe && item.ano > 0)) {
+        preencherFipeSuperbid(lotesSuperbid);
+      }
     }
 
     async function carregarAutomatico() {
@@ -433,7 +533,6 @@
         const ch = chaveLote(l);
         const m = marcacoes[ch] || {};
         const descFipe = (l.fipe > 0 && l.lance > 0 && l.lance < l.fipe) ? ` (-${Math.round(((l.fipe - l.lance) / l.fipe) * 100)}%)` : "";
-        const labelRef = l.leiloeiro === "Superbid" ? "1ª Praça / Ref." : "Ref. / FIPE";
         return `
           <div class="card">
             <div>
@@ -453,7 +552,7 @@
             <div>
               <div class="valores">
                 <span>Lance atual<strong>${formatarMoeda(l.lance)}${descFipe}</strong></span>
-                <span>${labelRef}<strong>${formatarMoeda(l.fipe)}</strong></span>
+                <span>Ref. / FIPE<strong>${formatarMoeda(l.fipe)}</strong></span>
               </div>
               <div class="checks">
                 <label><input type="checkbox" ${m.historico ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'historico')" /> Histórico conferido (sem leilão/sinistro)</label>
