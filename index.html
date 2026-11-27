@@ -166,6 +166,13 @@
         </div>
 
         <div class="campo">
+          <label for="filtro-leilao">Leilão</label>
+          <select id="filtro-leilao" onchange="renderizar()">
+            <option value="">Todos os leilões</option>
+          </select>
+        </div>
+
+        <div class="campo">
           <label for="filtro-estado">Estado</label>
           <select id="filtro-estado" onchange="renderizar()">
             <option value="">Todos os estados</option>
@@ -266,166 +273,10 @@
     }
 
     function popularFiltros() {
+      const leiloes = new Set(["Copart", "Superbid"]);
       const estados = new Set();
       const modelos = new Set();
       const datas = new Set();
 
       lotes.forEach(l => {
-        if (l.estado) estados.add(l.estado);
-        if (l.titulo) modelos.add(l.titulo.trim());
-        if (l.data_leilao) datas.add(l.data_leilao);
-      });
-
-      const selEstado = document.getElementById("filtro-estado");
-      const estadoAtual = selEstado.value;
-      selEstado.innerHTML = `<option value="">Todos os estados</option>` +
-        Array.from(estados).sort().map(uf => `<option value="${uf}">${uf}</option>`).join("");
-      selEstado.value = estadoAtual;
-
-      const selModelo = document.getElementById("filtro-modelo");
-      const modeloAtual = selModelo.value;
-      selModelo.innerHTML = `<option value="">Todos os modelos</option>` +
-        Array.from(modelos).sort().map(mod => `<option value="${mod}">${mod}</option>`).join("");
-      selModelo.value = modeloAtual;
-
-      const selData = document.getElementById("filtro-data");
-      const dataAtual = selData.value;
-      selData.innerHTML = `<option value="">Todas as datas</option>` +
-        Array.from(datas).sort().map(dt => `<option value="${dt}">${formatarDataBR(dt)}</option>`).join("");
-      selData.value = dataAtual;
-    }
-
-    function limparFiltros() {
-      document.getElementById("filtro-estado").value = "";
-      document.getElementById("filtro-modelo").value = "";
-      document.getElementById("filtro-data").value = "";
-      document.getElementById("busca").value = "";
-      document.getElementById("so-financiamento").checked = true;
-      document.getElementById("so-historico").checked = false;
-      document.getElementById("so-seguro").checked = false;
-      renderizar();
-    }
-
-    function processarDados(dados, fonteTexto) {
-      const lista = Array.isArray(dados) ? dados : (dados.lotes || []);
-      lotes = lista.map(l => {
-        const origem = detectarOrigem(l);
-        const estado = extrairEstado(l.local);
-        return { ...l, origem, estado, nota: calcularNota(l, origem) };
-      }).sort((a, b) => b.nota - a.nota);
-      localStorage.setItem("moto_leilao_dados", JSON.stringify(lotes));
-      document.getElementById("status-carga").textContent = `${lotes.length} lotes carregados (${fonteTexto})`;
-      popularFiltros();
-      renderizar();
-    }
-
-    async function carregarAutomatico() {
-      const status = document.getElementById("status-carga");
-      status.textContent = "Carregando lotes.json do repositório...";
-      try {
-        const resp = await fetch("./lotes.json?t=" + Date.now());
-        if (!resp.ok) throw new Error("Arquivo não encontrado");
-        const dados = await resp.json();
-        processarDados(dados, "sincronizado com GitHub");
-      } catch (e) {
-        const cache = localStorage.getItem("moto_leilao_dados");
-        if (cache) {
-          lotes = JSON.parse(cache);
-          status.textContent = `Usando dados salvos no navegador (${lotes.length} lotes)`;
-          popularFiltros();
-          renderizar();
-        } else {
-          status.textContent = "Nenhum lotes.json encontrado ainda.";
-        }
-      }
-    }
-
-    function lerArquivoManual(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        try {
-          processarDados(JSON.parse(e.target.result), "arquivo manual");
-        } catch {
-          alert("Arquivo JSON inválido.");
-        }
-      };
-      reader.readAsText(file);
-    }
-
-    function renderizar() {
-      const estadoFiltro = document.getElementById("filtro-estado").value;
-      const modeloFiltro = document.getElementById("filtro-modelo").value;
-      const dataFiltro = document.getElementById("filtro-data").value;
-      const texto = document.getElementById("busca").value.toLowerCase();
-      const soFin = document.getElementById("so-financiamento").checked;
-      const soHist = document.getElementById("so-historico").checked;
-      const soSeg = document.getElementById("so-seguro").checked;
-
-      const filtrados = lotes.filter(l => {
-        const ch = chaveLote(l);
-        const m = marcacoes[ch] || {};
-        if (estadoFiltro && l.estado !== estadoFiltro) return false;
-        if (modeloFiltro && (l.titulo || "").trim() !== modeloFiltro) return false;
-        if (dataFiltro && l.data_leilao !== dataFiltro) return false;
-        if (soFin && l.origem !== "financiamento") return false;
-        if (soHist && !m.historico) return false;
-        if (soSeg && !m.seguro) return false;
-        if (texto) {
-          const alvo = `${l.titulo} ${l.local} ${l.comitente} ${l.descricao} ${l.leiloeiro} ${l.lote}`.toLowerCase();
-          if (!alvo.includes(texto)) return false;
-        }
-        return true;
-      });
-
-      document.getElementById("stats").textContent = `Mostrando ${filtrados.length} de ${lotes.length} motos`;
-      const grid = document.getElementById("grid");
-
-      if (!filtrados.length) {
-        grid.innerHTML = `<div class="aviso">Nenhuma moto encontrada com os filtros atuais.</div>`;
-        return;
-      }
-
-      grid.innerHTML = filtrados.map(l => {
-        const ch = chaveLote(l);
-        const m = marcacoes[ch] || {};
-        const descFipe = (l.fipe > 0 && l.lance > 0 && l.lance < l.fipe)
-          ? ` (-${Math.round(((l.fipe - l.lance) / l.fipe) * 100)}%)`
-          : "";
-        return `
-          <div class="card">
-            <div>
-              <div class="card-top">
-                <span class="badge ${l.origem}">${l.origem}</span>
-                <span class="nota">Nota ${l.nota}</span>
-              </div>
-              <div class="titulo">${l.titulo || "Moto sem título"} (${l.ano || "—"})</div>
-              <div class="meta">
-                <strong>${l.leiloeiro}</strong> • Lote ${l.lote}<br>
-                Pátio: <strong>${l.local || "—"}</strong> • Data: ${formatarDataBR(l.data_leilao) || "—"}<br>
-                KM: ${l.km ? l.km.toLocaleString("pt-BR") + " km" : "Não informado"}<br>
-                Comitente: ${l.comitente || "Não informado"}
-              </div>
-              ${l.descricao ? `<div class="desc">${l.descricao}</div>` : ""}
-            </div>
-            <div>
-              <div class="valores">
-                <span>Lance atual<strong>${formatarMoeda(l.lance)}${descFipe}</strong></span>
-                <span>Ref. / FIPE<strong>${formatarMoeda(l.fipe)}</strong></span>
-              </div>
-              <div class="checks">
-                <label><input type="checkbox" ${m.historico ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'historico')" /> Histórico conferido (sem leilão/sinistro)</label>
-                <label><input type="checkbox" ${m.seguro ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'seguro')" /> Seguro aceito na cotação</label>
-              </div>
-              <a class="btn-lote" href="${l.url}" target="_blank">Abrir lote no leiloeiro ↗</a>
-            </div>
-          </div>
-        `;
-      }).join("");
-    }
-
-    carregarAutomatico();
-  </script>
-</body>
-</html>
+        if (l.leiloeiro) leiloes
