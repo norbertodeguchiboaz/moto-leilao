@@ -45,6 +45,47 @@ BLOQUEIO_SUPERBID_RE = re.compile(
 ESTADOS_BR = (
     "AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|TO"
 )
+NOMES_ESTADO_PARA_UF = {
+    "acre": "AC",
+    "alagoas": "AL",
+    "amapa": "AP",
+    "amazonas": "AM",
+    "bahia": "BA",
+    "ceara": "CE",
+    "distrito federal": "DF",
+    "espirito santo": "ES",
+    "goias": "GO",
+    "maranhao": "MA",
+    "mato grosso": "MT",
+    "mato grosso do sul": "MS",
+    "minas gerais": "MG",
+    "para": "PA",
+    "paraiba": "PB",
+    "parana": "PR",
+    "pernambuco": "PE",
+    "piaui": "PI",
+    "rio de janeiro": "RJ",
+    "rio grande do norte": "RN",
+    "rio grande do sul": "RS",
+    "rondonia": "RO",
+    "roraima": "RR",
+    "santa catarina": "SC",
+    "sao paulo": "SP",
+    "tocantins": "TO",
+}
+CIDADE_SEM_UF_PARA_UF = {
+    "macapa": "AP",
+    "belo horizonte": "MG",
+    "curitiba": "PR",
+    "maringa": "PR",
+    "sao paulo": "SP",
+    "rio de janeiro": "RJ",
+    "fortaleza": "CE",
+    "recife": "PE",
+    "goiania": "GO",
+    "campo grande": "MS",
+    "florianopolis": "SC",
+}
 
 
 def num(texto):
@@ -106,15 +147,19 @@ def adaptador_exemplo():
     return lotes
 
 
+def _normalizar_sem_acento(texto):
+    normalizado = unicodedata.normalize("NFKD", texto or "")
+    sem_acentos = "".join(ch for ch in normalizado if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", sem_acentos).strip().lower()
+
+
 def _limpar_html_superbid(html_texto):
     sem_tags = re.sub(r"<[^>]+>", " ", html_texto or "")
     return re.sub(r"\s+", " ", sem_tags).strip()
 
 
 def _slug_superbid(titulo):
-    normalizado = unicodedata.normalize("NFKD", titulo or "")
-    sem_acentos = "".join(ch for ch in normalizado if not unicodedata.combining(ch))
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", sem_acentos).strip("-").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", _normalizar_sem_acento(titulo)).strip("-")
     return slug or "lote"
 
 
@@ -130,10 +175,34 @@ def _ano_superbid(titulo, desc_limpa):
     return 0
 
 
+def _uf_de_valor(valor):
+    if not valor:
+        return ""
+    s = str(valor).strip()
+    up = s.upper()
+    if re.fullmatch(rf"(?:{ESTADOS_BR})", up):
+        return up
+    chave = _normalizar_sem_acento(s)
+    if chave in NOMES_ESTADO_PARA_UF:
+        return NOMES_ESTADO_PARA_UF[chave]
+    m_uf = re.search(rf"\b({ESTADOS_BR})\b", up)
+    return m_uf.group(1) if m_uf else ""
+
+
 def _local_superbid(offer, texto_analise):
     texto = re.sub(r"\s+", " ", texto_analise or "").strip()
+    seller = offer.get("seller") or {}
+    location = offer.get("location") or {}
+    auction = offer.get("auction") or {}
 
-    # 1. Tenta extrair "Cidade/UF" ou "Cidade - UF" explícito no título/descrição
+    cidade = (
+        location.get("city")
+        or seller.get("city")
+        or auction.get("city")
+        or ""
+    ).strip()
+
+    # 1. Tenta extrair "Cidade/UF" ou "Cidade - UF" explícito no texto
     m_cid_uf = re.search(
         rf"\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\'-]{{1,35}}?)\s*(?:/|-|–)\s*({ESTADOS_BR})\b",
         texto,
@@ -145,23 +214,42 @@ def _local_superbid(offer, texto_analise):
         if len(cid) >= 3 and not re.search(
             r"\b(ANO|LOTE|PLACA|CHASSI|FINAL)\b", cid, re.IGNORECASE
         ):
-            return f"{cid.title()} - {uf}"
+            cidade_final = cid.title()
+            return f"{cidade_final} - {uf}"
 
-    # 2. Caso contrário, usa cidade do vendedor/local + UF explícita se houver
-    seller = offer.get("seller") or {}
-    location = offer.get("location") or {}
-    cidade = (seller.get("city") or location.get("city") or "").strip()
-
+    # 2. Busca UF nos campos estruturados ou no texto
     uf = ""
-    m_uf = re.search(
-        rf"\(({ESTADOS_BR})\)|\bUF[:\s]*({ESTADOS_BR})\b", texto, re.IGNORECASE
-    )
-    if m_uf:
-        uf = ((m_uf.group(1) or m_uf.group(2)) or "").upper()
+    for fonte in (location, seller, auction):
+        for campo in ("state", "uf", "stateCode", "region"):
+            uf = _uf_de_valor(fonte.get(campo))
+            if uf:
+                break
+        if uf:
+            break
+
+    if not uf:
+        m_uf = re.search(
+            rf"\(({ESTADOS_BR})\)|\bUF[:\s]*({ESTADOS_BR})\b", texto, re.IGNORECASE
+        )
+        if m_uf:
+            uf = ((m_uf.group(1) or m_uf.group(2)) or "").upper()
+
+    if not uf:
+        for fonte_texto in (cidade, texto):
+            chave_texto = _normalizar_sem_acento(fonte_texto)
+            for nome_est, sigla_uf in NOMES_ESTADO_PARA_UF.items():
+                if re.search(rf"\b{re.escape(nome_est)}\b", chave_texto):
+                    uf = sigla_uf
+                    break
+            if uf:
+                break
+
+    if not uf and cidade:
+        uf = CIDADE_SEM_UF_PARA_UF.get(_normalizar_sem_acento(cidade), "")
 
     if cidade and uf:
-        return f"{cidade} - {uf}"
-    return uf or cidade or "Brasil"
+        return f"{cidade.title()} - {uf}"
+    return uf or (cidade.title() if cidade else "Brasil")
 
 
 def adaptador_superbid(max_paginas=15, page_size=30):
