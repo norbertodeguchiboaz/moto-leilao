@@ -291,6 +291,44 @@ def _local_superbid(offer, texto_analise):
     return uf or (cidade.title() if cidade else "Brasil")
 
 
+def _formatar_data_hora_br(valor):
+    s = str(valor or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}:\d{2}(?::\d{2})?))?", s)
+    if m:
+        data_br = f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+        return f"{data_br} às {m.group(4)}" if m.group(4) else data_br
+    return s
+
+
+def _datas_superbid(offer):
+    auction = offer.get("auction") or {}
+    abertura_raw = (
+        offer.get("startDate")
+        or offer.get("initialDate")
+        or offer.get("openDate")
+        or offer.get("openingDate")
+        or auction.get("startDate")
+        or auction.get("initialDate")
+        or auction.get("openDate")
+        or ""
+    )
+    encerramento_raw = (
+        offer.get("endDate")
+        or offer.get("closeDate")
+        or offer.get("closingDate")
+        or auction.get("endDate")
+        or ""
+    )
+    return (
+        str(abertura_raw).strip(),
+        str(encerramento_raw).strip(),
+        _formatar_data_hora_br(abertura_raw),
+        _formatar_data_hora_br(encerramento_raw),
+    )
+
+
 def adaptador_superbid(max_paginas=15, page_size=30):
     """Superbid Exchange via API JSON de ofertas de motocicletas."""
     lotes, vistos = [], set()
@@ -332,10 +370,18 @@ def adaptador_superbid(max_paginas=15, page_size=30):
                 continue
 
             vistos.add(offer_id)
-            end_date = str(o.get("endDate") or "")
+            _, end_raw, abertura_br, encerramento_br = _datas_superbid(o)
             auction_desc = ((o.get("auction") or {}).get("desc") or "Superbid").strip()
             seller_name = ((o.get("seller") or {}).get("name") or auction_desc).strip()
-            detalhe_resumo = f"Encerra: {end_date} • Leilão: {auction_desc}"
+
+            partes_meta = []
+            if abertura_br:
+                partes_meta.append(f"Abertura: {abertura_br}")
+            if encerramento_br:
+                partes_meta.append(f"Encerramento: {encerramento_br}")
+            partes_meta.append(f"Leilão: {auction_desc}")
+
+            detalhe_resumo = " • ".join(partes_meta)
             descricao_final = f"{detalhe_resumo} — {desc_limpa[:260]}".strip(" —")
 
             lotes.append({
@@ -349,7 +395,9 @@ def adaptador_superbid(max_paginas=15, page_size=30):
                 "comitente": seller_name,
                 "descricao": descricao_final,
                 "local": _local_superbid(o, texto_analise),
-                "data_leilao": end_date[:10],
+                "data_abertura": abertura_br,
+                "data_encerramento": encerramento_br,
+                "data_leilao": end_raw[:10],
                 "url": f"https://www.superbid.net/oferta/{_slug_superbid(titulo)}-{offer_id}",
             })
 
