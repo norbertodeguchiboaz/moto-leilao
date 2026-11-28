@@ -248,16 +248,22 @@ def _local_superbid(offer, texto_analise):
         ):
             return f"{cid.title()} - {uf_texto}"
 
-    # 3. Se temos a cidade da API, resolve UF pelo mapa direto ou sigla explícita
+    # 3. Se temos a cidade da API, resolve UF pelo mapa direto
     if not uf and cidade:
         uf = CIDADE_SEM_UF_PARA_UF.get(_normalizar_sem_acento(cidade), "")
 
+    # 4. Caso específico de "- BH - MG" ou sigla/nome de estado no texto
+    if not uf and re.search(r"\bBH\s*-\s*MG\b", texto, re.IGNORECASE):
+        return "Belo Horizonte - MG"
+
     if not uf:
         m_uf = re.search(
-            rf"\(({ESTADOS_BR})\)|\bUF[:\s]*({ESTADOS_BR})\b", texto, re.IGNORECASE
+            rf"\(({ESTADOS_BR})\)|\bUF[:\s]*({ESTADOS_BR})\b|(?:^|[\s/–-])({ESTADOS_BR})(?=$|[\s,.;:)\]])",
+            texto,
+            re.IGNORECASE,
         )
         if m_uf:
-            uf = ((m_uf.group(1) or m_uf.group(2)) or "").upper()
+            uf = ((m_uf.group(1) or m_uf.group(2) or m_uf.group(3)) or "").upper()
 
     if cidade and uf:
         return f"{cidade.title()} - {uf}"
