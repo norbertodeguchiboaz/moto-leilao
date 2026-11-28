@@ -34,16 +34,31 @@
     .fontes a { color: var(--accent); text-decoration: none; background: rgba(56, 189, 248, 0.1); padding: 4px 10px; border-radius: 4px; }
     .fontes a:hover { text-decoration: underline; }
     .layout { display: grid; grid-template-columns: 270px 1fr; gap: 20px; align-items: start; }
-    @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
     .sidebar { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; position: sticky; top: 20px; display: flex; flex-direction: column; gap: 14px; }
     .sidebar-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
     .sidebar-header h2 { margin: 0; font-size: 1rem; }
+    .sidebar-acoes { display: flex; align-items: center; gap: 12px; }
     .btn-limpar { background: transparent; border: none; color: var(--accent); padding: 0; font-size: 0.8rem; cursor: pointer; }
+    .btn-toggle-filtros { display: none; background: rgba(56, 189, 248, 0.15); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.35); padding: 5px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+    .sidebar-corpo { display: flex; flex-direction: column; gap: 14px; }
     .campo { display: flex; flex-direction: column; gap: 6px; }
     .campo label { font-size: 0.82rem; color: var(--muted); font-weight: 600; }
     .campo select, .campo input[type="text"] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 8px 10px; border-radius: 6px; font-size: 0.88rem; }
     .filtros-check { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; font-size: 0.86rem; }
     .filtros-check label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+    @media (max-width: 820px) {
+      body { padding: 12px; }
+      .layout { grid-template-columns: 1fr; gap: 14px; }
+      .sidebar { position: static; top: auto; padding: 12px 14px; gap: 0; }
+      .sidebar-header { border-bottom: none; padding-bottom: 0; }
+      .sidebar.aberta .sidebar-header { border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px; }
+      .btn-toggle-filtros { display: inline-block; }
+      .sidebar-corpo { display: none; }
+      .sidebar.aberta .sidebar-corpo { display: flex; }
+      .grid { grid-template-columns: 1fr; }
+    }
+
     .conteudo { min-width: 0; }
     .stats { color: var(--muted); font-size: 0.88rem; margin-bottom: 12px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; }
@@ -98,35 +113,40 @@
     </div>
 
     <div class="layout">
-      <aside class="sidebar">
+      <aside class="sidebar" id="painel-filtros">
         <div class="sidebar-header">
           <h2>Filtros</h2>
-          <button class="btn-limpar" onclick="limparFiltros()">Limpar</button>
+          <div class="sidebar-acoes">
+            <button class="btn-limpar" onclick="limparFiltros()">Limpar</button>
+            <button type="button" class="btn-toggle-filtros" id="btn-toggle-filtros" onclick="alternarFiltrosMobile()">Mostrar</button>
+          </div>
         </div>
-        <div class="campo">
-          <label for="filtro-leilao">Leilão</label>
-          <select id="filtro-leilao" onchange="renderizar()"><option value="">Todos os leilões</option></select>
-        </div>
-        <div class="campo">
-          <label for="filtro-estado">Estado</label>
-          <select id="filtro-estado" onchange="renderizar()"><option value="">Todos os estados</option></select>
-        </div>
-        <div class="campo">
-          <label for="filtro-modelo">Modelo</label>
-          <select id="filtro-modelo" onchange="renderizar()"><option value="">Todos os modelos</option></select>
-        </div>
-        <div class="campo">
-          <label for="filtro-data">Data do leilão</label>
-          <select id="filtro-data" onchange="renderizar()"><option value="">Todas as datas</option></select>
-        </div>
-        <div class="campo">
-          <label for="busca">Busca rápida</label>
-          <input type="text" id="busca" placeholder="Lote, banco, pátio..." oninput="renderizar()" />
-        </div>
-        <div class="filtros-check">
-          <label><input type="checkbox" id="so-financiamento" checked onchange="renderizar()" /> Ocultar sinistros (Copart)</label>
-          <label><input type="checkbox" id="so-historico" onchange="renderizar()" /> Histórico conferido</label>
-          <label><input type="checkbox" id="so-seguro" onchange="renderizar()" /> Seguro aceito</label>
+        <div class="sidebar-corpo">
+          <div class="campo">
+            <label for="filtro-leilao">Leilão</label>
+            <select id="filtro-leilao" onchange="renderizar()"><option value="">Todos os leilões</option></select>
+          </div>
+          <div class="campo">
+            <label for="filtro-estado">Estado</label>
+            <select id="filtro-estado" onchange="renderizar()"><option value="">Todos os estados</option></select>
+          </div>
+          <div class="campo">
+            <label for="filtro-modelo">Modelo</label>
+            <select id="filtro-modelo" onchange="renderizar()"><option value="">Todos os modelos</option></select>
+          </div>
+          <div class="campo">
+            <label for="filtro-data">Data do leilão</label>
+            <select id="filtro-data" onchange="renderizar()"><option value="">Todas as datas</option></select>
+          </div>
+          <div class="campo">
+            <label for="busca">Busca rápida</label>
+            <input type="text" id="busca" placeholder="Lote, banco, pátio..." oninput="renderizar()" />
+          </div>
+          <div class="filtros-check">
+            <label><input type="checkbox" id="so-financiamento" checked onchange="renderizar()" /> Ocultar sinistros (Copart)</label>
+            <label><input type="checkbox" id="so-historico" onchange="renderizar()" /> Histórico conferido</label>
+            <label><input type="checkbox" id="so-seguro" onchange="renderizar()" /> Seguro aceito</label>
+          </div>
         </div>
       </aside>
       <main class="conteudo">
@@ -143,6 +163,13 @@
     let marcacoes = JSON.parse(localStorage.getItem("moto_leilao_marcacoes") || "{}");
 
     function chaveLote(l) { return `${l.leiloeiro}-${l.lote}`; }
+
+    function alternarFiltrosMobile() {
+      const painel = document.getElementById("painel-filtros");
+      const btn = document.getElementById("btn-toggle-filtros");
+      const aberto = painel.classList.toggle("aberta");
+      btn.textContent = aberto ? "Ocultar" : "Mostrar";
+    }
 
     function gerarLinkLote(l) {
       if (l.url && l.url.includes("superbid.net/oferta/")) {
