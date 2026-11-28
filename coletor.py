@@ -42,6 +42,9 @@ BLOQUEIO_SUPERBID_RE = re.compile(
     r"\b(sucata|inserv[ií]vel|pe[cç]a|pe[cç]as|kit\b|quadriciclo|vestu[aá]rio|[oó]rg[aã]o|suporte|carenagem)\b",
     re.IGNORECASE,
 )
+ESTADOS_BR = (
+    "AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|TO"
+)
 
 
 def num(texto):
@@ -128,14 +131,33 @@ def _ano_superbid(titulo, desc_limpa):
 
 
 def _local_superbid(offer, texto_analise):
+    texto = re.sub(r"\s+", " ", texto_analise or "").strip()
+
+    # 1. Tenta extrair "Cidade/UF" ou "Cidade - UF" explícito no título/descrição
+    m_cid_uf = re.search(
+        rf"\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\'-]{{1,35}}?)\s*(?:/|-|–)\s*({ESTADOS_BR})\b",
+        texto,
+        re.IGNORECASE,
+    )
+    if m_cid_uf:
+        cid = re.sub(r"\s+", " ", m_cid_uf.group(1)).strip(" ,;-")
+        uf = m_cid_uf.group(2).upper()
+        if len(cid) >= 3 and not re.search(
+            r"\b(ANO|LOTE|PLACA|CHASSI|FINAL)\b", cid, re.IGNORECASE
+        ):
+            return f"{cid.title()} - {uf}"
+
+    # 2. Caso contrário, usa cidade do vendedor/local + UF explícita se houver
     seller = offer.get("seller") or {}
     location = offer.get("location") or {}
     cidade = (seller.get("city") or location.get("city") or "").strip()
 
     uf = ""
-    m_uf = re.search(r"\(([A-Z]{2})\)|\bUF[:\s]*([A-Z]{2})\b", texto_analise or "")
+    m_uf = re.search(
+        rf"\(({ESTADOS_BR})\)|\bUF[:\s]*({ESTADOS_BR})\b", texto, re.IGNORECASE
+    )
     if m_uf:
-        uf = (m_uf.group(1) or m_uf.group(2) or "").upper()
+        uf = ((m_uf.group(1) or m_uf.group(2)) or "").upper()
 
     if cidade and uf:
         return f"{cidade} - {uf}"
