@@ -200,6 +200,42 @@ def _limpar_html_superbid(html_texto):
     return re.sub(r"\s+", " ", sem_tags).strip()
 
 
+def _observacoes_superbid(desc_limpa):
+    texto = re.sub(r"\s+", " ", desc_limpa or "").strip()
+    if not texto:
+        return ""
+
+    # Se houver "OBSERVAÇÕES:", extrai o conteúdo a partir desse bloco (ou após o rótulo)
+    m_obs = re.search(
+        r"\bOBSERVA[ÇC][ÕO]ES?\s*:?\s*(.+)$",
+        texto,
+        re.IGNORECASE,
+    )
+    if m_obs:
+        trecho_obs = m_obs.group(1).strip(" :-")
+        # Remove trechos finais administrativos se houver (ex.: BENEFÍCIO TRIBUTÁRIO)
+        trecho_obs = re.split(r"\bBENEF[ÍI]CIO\s+TRIBUT[ÁA]RIO\b", trecho_obs, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        return trecho_obs[:320]
+
+    # Caso não haja rótulo "OBSERVAÇÕES:", remove cabeçalho repetido do início
+    sem_cabecalho = re.sub(
+        r"^(?:LOTE\s*:\s*\S+\s+)?.*?(?=\b(?:D[ÉE]BITOS?|AVARIAS?|PRAZO|RETIRADA|VISITA[ÇC][ÃA]O|MULTAS?|LICENCIAMENTO|IPVA)\b)",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    ).strip(" :-")
+    if sem_cabecalho:
+        return sem_cabecalho[:320]
+
+    sem_ficha = re.sub(
+        r"^(?:LOTE\s*:\s*\S+\s+)?.*?(?:CHASSI/MOTOR\s*:\s*[^G]+)?(?:GRAVAME\s*:\s*\S*\s*)?",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    ).strip(" :-")
+    return (sem_ficha or texto)[:320]
+
+
 def _slug_superbid(titulo):
     slug = re.sub(r"[^a-z0-9]+", "-", _normalizar_sem_acento(titulo)).strip("-")
     return slug or "lote"
@@ -373,16 +409,7 @@ def adaptador_superbid(max_paginas=15, page_size=30):
             _, end_raw, abertura_br, encerramento_br = _datas_superbid(o)
             auction_desc = ((o.get("auction") or {}).get("desc") or "Superbid").strip()
             seller_name = ((o.get("seller") or {}).get("name") or auction_desc).strip()
-
-            partes_meta = []
-            if abertura_br:
-                partes_meta.append(f"Abertura: {abertura_br}")
-            if encerramento_br:
-                partes_meta.append(f"Encerramento: {encerramento_br}")
-            partes_meta.append(f"Leilão: {auction_desc}")
-
-            detalhe_resumo = " • ".join(partes_meta)
-            descricao_final = f"{detalhe_resumo} — {desc_limpa[:260]}".strip(" —")
+            observacoes_final = _observacoes_superbid(desc_limpa)
 
             lotes.append({
                 "leiloeiro": "Superbid",
@@ -393,7 +420,7 @@ def adaptador_superbid(max_paginas=15, page_size=30):
                 "lance": lance,
                 "fipe": 0,
                 "comitente": seller_name,
-                "descricao": descricao_final,
+                "descricao": observacoes_final,
                 "local": _local_superbid(o, texto_analise),
                 "data_abertura": abertura_br,
                 "data_encerramento": encerramento_br,
