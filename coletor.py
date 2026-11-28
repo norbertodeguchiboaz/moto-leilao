@@ -19,12 +19,29 @@ Formato de cada lote:
 import json
 import re
 import time
+import unicodedata
+from urllib.parse import urlencode
 
 import requests
 from bs4 import BeautifulSoup
 
 HEADERS = {"User-Agent": "MotoLeilaoBot/0.1 (uso pessoal)"}
+HEADERS_SUPERBID = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+}
 PAUSA = 3  # segundos entre requisições
+
+URL_SUPERBID_API = "https://offer-query.superbid.net/seo/offers/"
+LANCE_MINIMO_SUPERBID = 300.0
+BLOQUEIO_SUPERBID_RE = re.compile(
+    r"\b(sucata|inserv[ií]vel|pe[cç]a|pe[cç]as|kit\b|quadriciclo|vestu[aá]rio|[oó]rg[aã]o|suporte|carenagem)\b",
+    re.IGNORECASE,
+)
 
 
 def num(texto):
@@ -86,63 +103,113 @@ def adaptador_exemplo():
     return lotes
 
 
-URL_SUPERBID = (
-    "https://www.superbid.net/categorias/carros-motos/motos/motocicletas/"
-    "sao-paulo-sp?searchType=opened&pageNumber=1&pageSize=30&orderBy=score:desc"
-)
+def _limpar_html_superbid(html_texto):
+    sem_tags = re.sub(r"<[^>]+>", " ", html_texto or "")
+    return re.sub(r"\s+", " ", sem_tags).strip()
 
 
-def adaptador_superbid(paginas=3):
-    """Superbid Exchange. A listagem é montada por JavaScript (o HTML puro vem
-    quase vazio), então usamos um navegador automatizado:
-        pip install playwright && playwright install chromium
-    Obs.: a categoria "Veículos sinistrados" é separada na Superbid; esta URL
-    é a de motocicletas em geral, que mistura outras origens."""
-    from playwright.sync_api import sync_playwright
+def _slug_superbid(titulo):
+    normalizado = unicodedata.normalize("NFKD", titulo or "")
+    sem_acentos = "".join(ch for ch in normalizado if not unicodedata.combining(ch))
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", sem_acentos).strip("-").lower()
+    return slug or "lote"
 
+
+def _ano_superbid(titulo, desc_limpa):
+    for fonte in (titulo, desc_limpa):
+        m4 = re.search(r"\b(19\d{2}|20[0-2]\d)\b", fonte or "")
+        if m4:
+            return int(m4.group(1))
+        m2 = re.search(r"\b(\d{2})/\d{2}\b", fonte or "")
+        if m2:
+            yy = int(m2.group(1))
+            return 1900 + yy if yy >= 70 else 2000 + yy
+    return 0
+
+
+def _local_superbid(offer, texto_analise):
+    seller = offer.get("seller") or {}
+    location = offer.get("location") or {}
+    cidade = (seller.get("city") or location.get("city") or "").strip()
+
+    uf = ""
+    m_uf = re.search(r"\(([A-Z]{2})\)|\bUF[:\s]*([A-Z]{2})\b", texto_analise or "")
+    if m_uf:
+        uf = (m_uf.group(1) or m_uf.group(2) or "").upper()
+
+    if cidade and uf:
+        return f"{cidade} - {uf}"
+    return uf or cidade or "Brasil"
+
+
+def adaptador_superbid(max_paginas=15, page_size=30):
+    """Superbid Exchange via API JSON de ofertas de motocicletas."""
     lotes, vistos = [], set()
-    with sync_playwright() as p:
-        nav = p.chromium.launch(headless=True)
-        pg = nav.new_page(user_agent=HEADERS["User-Agent"])
-        for n in range(1, paginas + 1):
-            abrir(pg, URL_SUPERBID.replace("pageNumber=1", f"pageNumber={n}"),
-                  f"superbid_pagina_{n}")
-            try:
-                pg.wait_for_selector("a[href*='/oferta/']", timeout=20000)
-            except Exception:
-                break  # acabaram as páginas
-            for a in pg.query_selector_all("a[href*='/oferta/']"):
-                href = a.get_attribute("href") or ""
-                if href in vistos:
-                    continue
-                vistos.add(href)
-                texto = a.inner_text()
-                linhas = [x.strip() for x in texto.splitlines() if x.strip()]
-                ano = re.search(r"\b(19|20)\d{2}\b", texto)
-                data = re.search(r"at[eé]\s+(\d{2}/\d{2})", texto)
-                local = re.search(r"([A-Za-zÀ-ú ]+ - [A-Z]{2})", texto)
-                lotes.append({
-                    "leiloeiro": "Superbid",
-                    "lote": href.rstrip("/").split("-")[-1],
-                    "titulo": linhas[0] if linhas else "",
-                    "ano": int(ano.group(0)) if ano else 0,
-                    "km": None,
-                    "lance": num(re.findall(r"R\$\s*[\d.]+,\d{2}", texto)[-1]
-                                 if "R$" in texto else ""),
-                    "fipe": 0,
-                    "comitente": "",   # ver TODO abaixo
-                    "descricao": " ".join(linhas),
-                    "local": local.group(1).strip() if local else "",
-                    "data_leilao": data.group(1) if data else "",
-                    "url": href if href.startswith("http")
-                    else "https://exchange.superbid.net" + href,
-                })
-            time.sleep(PAUSA)
-        nav.close()
-    # TODO: abrir a página de cada lote (/oferta/...) e ler km, comitente e a
-    # descrição do vendedor. É lá que aparece se é financiamento, sinistro etc.
-    # Use só o bloco de descrição do lote: o rodapé do site cita "financiamento"
-    # e "sinistro" em textos genéricos e confundiria a classificação.
+    for pagina in range(1, max_paginas + 1):
+        params = {
+            "filter": "",
+            "locale": "pt_BR",
+            "orderBy": "score:desc",
+            "pageNumber": pagina,
+            "pageSize": page_size,
+            "portalId": "[2,15]",
+            "preOrderBy": "orderByFirstOpenedOffersAndSecondHasPhoto",
+            "requestOrigin": "marketplace",
+            "searchType": "opened",
+            "timeZoneId": "America/Sao_Paulo",
+            "urlSeo": "https://www.superbid.net/categorias/carros-motos/motos/motocicletas",
+        }
+        url_api = f"{URL_SUPERBID_API}?{urlencode(params)}"
+        resp = requests.get(url_api, headers=HEADERS_SUPERBID, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+
+        ofertas = payload.get("offers") or []
+        if not ofertas:
+            break
+
+        for o in ofertas:
+            offer_id = str(o.get("id") or "")
+            if not offer_id or offer_id in vistos:
+                continue
+
+            titulo = ((o.get("product") or {}).get("shortDesc") or "").strip()
+            desc_raw = ((o.get("offerDescription") or {}).get("offerDescription") or "")
+            desc_limpa = _limpar_html_superbid(desc_raw)
+            texto_analise = f"{titulo} {desc_limpa}"
+
+            lance = float(o.get("price") or 0)
+            if BLOQUEIO_SUPERBID_RE.search(texto_analise) or lance < LANCE_MINIMO_SUPERBID:
+                continue
+
+            vistos.add(offer_id)
+            end_date = str(o.get("endDate") or "")
+            auction_desc = ((o.get("auction") or {}).get("desc") or "Superbid").strip()
+            seller_name = ((o.get("seller") or {}).get("name") or auction_desc).strip()
+            detalhe_resumo = f"Encerra: {end_date} • Leilão: {auction_desc}"
+            descricao_final = f"{detalhe_resumo} — {desc_limpa[:260]}".strip(" —")
+
+            lotes.append({
+                "leiloeiro": "Superbid",
+                "lote": str(o.get("lotNumber") or ""),
+                "titulo": titulo,
+                "ano": _ano_superbid(titulo, desc_limpa),
+                "km": None,
+                "lance": lance,
+                "fipe": 0,
+                "comitente": seller_name,
+                "descricao": descricao_final,
+                "local": _local_superbid(o, texto_analise),
+                "data_leilao": end_date[:10],
+                "url": f"https://www.superbid.net/oferta/{_slug_superbid(titulo)}-{offer_id}",
+            })
+
+        total = int(payload.get("total") or 0)
+        if total > 0 and pagina * page_size >= total:
+            break
+        time.sleep(PAUSA)
+
+    print(f"[superbid] {len(lotes)} lotes coletados")
     return lotes
 
 
@@ -277,8 +344,7 @@ def adaptador_copart(max_paginas=5):
 
 
 ADAPTADORES = [
-    # adaptador_superbid,  # desativado: a Superbid mostra "Just a moment..." (verificação
-    #                      # anti-robô da Cloudflare) e não entrega a lista ao coletor.
+    adaptador_superbid,
     adaptador_copart,
     # adaptador_exemplo,   # modelo para os demais leiloeiros
 ]
