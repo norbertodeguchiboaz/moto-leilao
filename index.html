@@ -303,7 +303,7 @@
           origem: origem,
           local: local || "Brasil",
           data_leilao: dataLeilao,
-          url: `https://www.superbid.net/busca?searchTerm=${encodeURIComponent(tituloLimpo || numLote)}`
+          url: `https://www.superbid.net/categorias/todos-os-produtos?searchType=opened&searchTerm=${encodeURIComponent((tituloLimpo || numLote).replace(/\//g, " "))}`
         });
       }
       return encontrados;
