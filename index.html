@@ -142,7 +142,15 @@
     let lotes = [];
     let marcacoes = JSON.parse(localStorage.getItem("moto_leilao_marcacoes") || "{}");
 
-    function chaveLote(l) { return l.url || `${l.leiloeiro}-${l.lote}`; }
+    function chaveLote(l) { return `${l.leiloeiro}-${l.lote}`; }
+
+    function gerarLinkLote(l) {
+      if ((l.leiloeiro || "").toLowerCase() === "superbid") {
+        const termo = (l.titulo || l.lote || "").replace(/[^a-zA-Z0-9À-ÿ\s]/g, " ").replace(/\s+/g, " ").trim();
+        return `https://www.superbid.net/categorias/carros-motos/motos/motocicletas?searchType=opened&searchTerm=${encodeURIComponent(termo)}`;
+      }
+      return l.url || "#";
+    }
 
     function alternarCaixaSuperbid() {
       document.getElementById("caixa-superbid").classList.toggle("aberta");
@@ -303,7 +311,7 @@
           origem: origem,
           local: local || "Brasil",
           data_leilao: dataLeilao,
-          url: `https://www.superbid.net/categorias/todos-os-produtos?searchType=opened&searchTerm=${encodeURIComponent((tituloLimpo || numLote).replace(/\//g, " "))}`
+          url: gerarLinkLote({ leiloeiro: "Superbid", titulo: tituloLimpo, lote: numLote })
         });
       }
       return encontrados;
@@ -557,7 +565,7 @@
                 <label><input type="checkbox" ${m.historico ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'historico')" /> Histórico conferido (sem leilão/sinistro)</label>
                 <label><input type="checkbox" ${m.seguro ? "checked" : ""} onchange="alternarMarcacao('${ch}', 'seguro')" /> Seguro aceito na cotação</label>
               </div>
-              <a class="btn-lote" href="${l.url}" target="_blank">Abrir lote no leiloeiro ↗</a>
+              <a class="btn-lote" href="${gerarLinkLote(l)}" target="_blank">Abrir lote no leiloeiro ↗</a>
             </div>
           </div>`;
       }).join("");
