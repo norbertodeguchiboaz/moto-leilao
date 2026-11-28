@@ -85,7 +85,28 @@ CIDADE_SEM_UF_PARA_UF = {
     "goiania": "GO",
     "campo grande": "MS",
     "florianopolis": "SC",
+    "salvador": "BA",
+    "manaus": "AM",
+    "belem": "PA",
+    "porto alegre": "RS",
+    "brasilia": "DF",
+    "vitoria": "ES",
+    "cuiaba": "MT",
+    "joao pessoa": "PB",
+    "teresina": "PI",
+    "natal": "RN",
+    "aracaju": "SE",
+    "maceio": "AL",
+    "sao luis": "MA",
+    "porto velho": "RO",
+    "boa vista": "RR",
+    "palmas": "TO",
+    "rio branco": "AC",
 }
+TERMOS_ENDERECO_RE = re.compile(
+    r"\b(bairro|rua|av|avenida|rodovia|estrada|alameda|travessa|lote|ano|placa|chassi|final|centro|visita[cç][aã]o)\b",
+    re.IGNORECASE,
+)
 
 
 def num(texto):
@@ -202,22 +223,7 @@ def _local_superbid(offer, texto_analise):
         or ""
     ).strip()
 
-    # 1. Tenta extrair "Cidade/UF" ou "Cidade - UF" explícito no texto
-    m_cid_uf = re.search(
-        rf"\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\'-]{{1,35}}?)\s*(?:/|-|–)\s*({ESTADOS_BR})\b",
-        texto,
-        re.IGNORECASE,
-    )
-    if m_cid_uf:
-        cid = re.sub(r"\s+", " ", m_cid_uf.group(1)).strip(" ,;-")
-        uf = m_cid_uf.group(2).upper()
-        if len(cid) >= 3 and not re.search(
-            r"\b(ANO|LOTE|PLACA|CHASSI|FINAL)\b", cid, re.IGNORECASE
-        ):
-            cidade_final = cid.title()
-            return f"{cidade_final} - {uf}"
-
-    # 2. Busca UF nos campos estruturados ou no texto
+    # 1. Busca UF nos campos estruturados da oferta
     uf = ""
     for fonte in (location, seller, auction):
         for campo in ("state", "uf", "stateCode", "region"):
@@ -227,25 +233,31 @@ def _local_superbid(offer, texto_analise):
         if uf:
             break
 
+    # 2. Tenta extrair "Cidade/UF" ou "Cidade - UF" limpo no texto (sem endereço/bairro)
+    for m_cid_uf in re.finditer(
+        rf"\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\']{{2,32}}?)\s*(?:/|-|–)\s*({ESTADOS_BR})(?=$|[\s,.;:)\]])",
+        texto,
+        re.IGNORECASE,
+    ):
+        cid = re.sub(r"\s+", " ", m_cid_uf.group(1)).strip(" ,;-")
+        uf_texto = m_cid_uf.group(2).upper()
+        if (
+            len(cid) >= 3
+            and not TERMOS_ENDERECO_RE.search(cid)
+            and not re.search(rf"\b(?:{ESTADOS_BR}|BH)\b", cid, re.IGNORECASE)
+        ):
+            return f"{cid.title()} - {uf_texto}"
+
+    # 3. Se temos a cidade da API, resolve UF pelo mapa direto ou sigla explícita
+    if not uf and cidade:
+        uf = CIDADE_SEM_UF_PARA_UF.get(_normalizar_sem_acento(cidade), "")
+
     if not uf:
         m_uf = re.search(
             rf"\(({ESTADOS_BR})\)|\bUF[:\s]*({ESTADOS_BR})\b", texto, re.IGNORECASE
         )
         if m_uf:
             uf = ((m_uf.group(1) or m_uf.group(2)) or "").upper()
-
-    if not uf:
-        for fonte_texto in (cidade, texto):
-            chave_texto = _normalizar_sem_acento(fonte_texto)
-            for nome_est, sigla_uf in NOMES_ESTADO_PARA_UF.items():
-                if re.search(rf"\b{re.escape(nome_est)}\b", chave_texto):
-                    uf = sigla_uf
-                    break
-            if uf:
-                break
-
-    if not uf and cidade:
-        uf = CIDADE_SEM_UF_PARA_UF.get(_normalizar_sem_acento(cidade), "")
 
     if cidade and uf:
         return f"{cidade.title()} - {uf}"
