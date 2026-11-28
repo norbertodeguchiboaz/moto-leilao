@@ -211,6 +211,58 @@
       return m ? `${m[3]}/${m[2]}/${m[1]}` : dataStr;
     }
 
+    function formatarEncerraEm(l) {
+      if (l.encerra_em) return l.encerra_em;
+
+      let alvo = null;
+      const raw = (l.data_encerramento || l.data_leilao || "").trim();
+      if (!raw) return "Não informado";
+
+      const mBr = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s*(?:às|-)?\s*(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+      const mIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+
+      if (mBr) {
+        alvo = new Date(
+          parseInt(mBr[3], 10),
+          parseInt(mBr[2], 10) - 1,
+          parseInt(mBr[1], 10),
+          parseInt(mBr[4] || "12", 10),
+          parseInt(mBr[5] || "0", 10),
+          parseInt(mBr[6] || "0", 10)
+        );
+      } else if (mIso) {
+        alvo = new Date(
+          parseInt(mIso[1], 10),
+          parseInt(mIso[2], 10) - 1,
+          parseInt(mIso[3], 10),
+          parseInt(mIso[4] || "12", 10),
+          parseInt(mIso[5] || "0", 10),
+          parseInt(mIso[6] || "0", 10)
+        );
+      } else {
+        const parsed = Date.parse(raw);
+        if (!Number.isNaN(parsed)) alvo = new Date(parsed);
+      }
+
+      if (!alvo || Number.isNaN(alvo.getTime())) return "Não informado";
+
+      const diffMs = alvo.getTime() - Date.now();
+      if (diffMs <= 0) return "Encerrado";
+
+      const totalMin = Math.floor(diffMs / 60000);
+      const dias = Math.floor(totalMin / 1440);
+      const horas = Math.floor((totalMin % 1440) / 60);
+      const minutos = totalMin % 60;
+
+      if (dias > 0) {
+        return `${dias}d ${horas}h ${minutos}min`;
+      }
+      if (horas > 0) {
+        return `${horas}h ${minutos}min`;
+      }
+      return `${minutos}min`;
+    }
+
     function detectarOrigem(l) {
       if (l.origem && l.origem !== "indefinida") return l.origem;
       const texto = `${l.comitente || ""} ${l.descricao || ""} ${l.titulo || ""}`.toLowerCase();
@@ -598,6 +650,7 @@
               <div class="meta">
                 <strong>${l.leiloeiro}</strong> • Lote ${l.lote}<br>
                 Pátio: <strong>${l.local || "—"}</strong> • Data: ${formatarDataBR(l.data_leilao) || "—"}<br>
+                Encerra em: <strong>${formatarEncerraEm(l)}</strong><br>
                 KM: ${l.km ? l.km.toLocaleString("pt-BR") + " km" : "Não informado"}<br>
                 Comitente: ${l.comitente || "Não informado"}
               </div>
