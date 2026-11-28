@@ -37,7 +37,9 @@ HEADERS_SUPERBID = {
 PAUSA = 3  # segundos entre requisições
 
 URL_SUPERBID_API = "https://offer-query.superbid.net/seo/offers/"
+URL_FIPE_MOTOS = "https://parallelum.com.br/fipe/api/v1/motos"
 LANCE_MINIMO_SUPERBID = 300.0
+MAX_CONSULTAS_FIPE = 90
 BLOQUEIO_SUPERBID_RE = re.compile(
     r"\b(sucata|inserv[ií]vel|pe[cç]a|pe[cç]as|kit\b|quadriciclo|vestu[aá]rio|[oó]rg[aã]o|suporte|carenagem)\b",
     re.IGNORECASE,
@@ -106,6 +108,25 @@ CIDADE_SEM_UF_PARA_UF = {
 TERMOS_ENDERECO_RE = re.compile(
     r"\b(bairro|rua|av|avenida|rodovia|estrada|alameda|travessa|lote|ano|placa|chassi|final|centro|visita[cç][aã]o)\b",
     re.IGNORECASE,
+)
+MARCAS_CONHECIDAS = (
+    "HONDA",
+    "YAMAHA",
+    "SUZUKI",
+    "KAWASAKI",
+    "BMW",
+    "TRIUMPH",
+    "DAFRA",
+    "HAOJUE",
+    "SHINERAY",
+    "AVELLOZ",
+    "ROYAL ENFIELD",
+    "DUCATI",
+    "HARLEY-DAVIDSON",
+    "KASINSKI",
+    "SUNDOWN",
+    "BULL",
+    "TRAXX",
 )
 
 
@@ -252,7 +273,7 @@ def _local_superbid(offer, texto_analise):
     if not uf and cidade:
         uf = CIDADE_SEM_UF_PARA_UF.get(_normalizar_sem_acento(cidade), "")
 
-    # 4. Caso específico de "- BH - MG" ou sigla/nome de estado no texto
+    # 4. Caso específico de "- BH - MG" ou sigla de estado no texto
     if not uf and re.search(r"\bBH\s*-\s*MG\b", texto, re.IGNORECASE):
         return "Belo Horizonte - MG"
 
@@ -479,10 +500,161 @@ ADAPTADORES = [
 
 
 # ------------------------------------------------------------------ enriquecer
+def _extrair_marca_modelo_fipe(titulo):
+    norm = _normalizar_sem_acento(titulo).upper()
+    marca_encontrada = ""
+    for marca in MARCAS_CONHECIDAS:
+        if re.search(rf"\b{re.escape(marca)}\b", norm):
+            marca_encontrada = marca
+            break
+
+    limpo = re.sub(r"\b(19\d{2}|20[0-2]\d)(?:/\d{2,4})?\b", " ", norm)
+    if marca_encontrada:
+        limpo = re.sub(rf"\b{re.escape(marca_encontrada)}\b", " ", limpo)
+
+    limpo = re.sub(
+        r"\b(BRANCA|BRANCO|PRETA|PRETO|PRATA|VERMELHA|VERMELHO|AZUL|CINZA|VERDE|AMARELA|AMARELO|DOURADA|DOURADO|LOTE|MOTO|MOTOCICLETA)\b",
+        " ",
+        limpo,
+    )
+    tokens = [
+        t for t in re.findall(r"[A-Z0-9]+", limpo)
+        if not re.fullmatch(r"[A-Z]{3}\d[A-Z0-9]{3}", t)
+    ]
+    modelo_query = " ".join(tokens[:4]).strip()
+    return marca_encontrada, modelo_query
+
+
+def _pontuar_modelo_fipe(modelo_query, nome_fipe):
+    q_tokens = [t for t in _normalizar_sem_acento(modelo_query).split() if len(t) >= 1]
+    n_norm = _normalizar_sem_acento(nome_fipe)
+    if not q_tokens:
+        return 0
+    acertos = sum(1 for t in q_tokens if re.search(rf"\b{re.escape(t)}\b", n_norm))
+    if acertos == 0:
+        return 0
+    return acertos * 10 - max(0, len(n_norm.split()) - len(q_tokens))
+
+
 def enriquecer_fipe(lotes):
-    """Preencha l['fipe'] consultando uma API de tabela FIPE
-    (por exemplo, a API pública parallelum: https://deividfortuna.github.io/fipe/).
-    Mapeie marca/modelo/ano do título para os códigos da FIPE."""
+    """Preenche l['fipe'] consultando a API pública da FIPE para motos
+    (https://parallelum.com.br/fipe/api/v1/motos)."""
+    pendentes = [l for l in lotes if not l.get("fipe") and (l.get("ano") or 0) > 0]
+    if not pendentes:
+        return lotes
+
+    try:
+        resp_marcas = requests.get(f"{URL_FIPE_MOTOS}/marcas", headers=HEADERS, timeout=20)
+        resp_marcas.raise_for_status()
+        marcas = resp_marcas.json() or []
+    except Exception as erro:
+        print(f"[fipe] falha ao buscar marcas: {erro}")
+        return lotes
+
+    cache_modelos = {}
+    cache_anos = {}
+    cache_preco = {}
+    preenchidos = 0
+    consultas = 0
+
+    for lote in pendentes:
+        if consultas >= MAX_CONSULTAS_FIPE:
+            break
+        ano = int(lote.get("ano") or 0)
+        marca_nome, modelo_query = _extrair_marca_modelo_fipe(lote.get("titulo") or "")
+        if not marca_nome or not modelo_query:
+            continue
+
+        marca_cod = ""
+        for m in marcas:
+            nome_m = _normalizar_sem_acento(m.get("nome") or "")
+            if marca_nome.lower() in nome_m:
+                marca_cod = str(m.get("codigo") or "")
+                break
+        if not marca_cod:
+            continue
+
+        if marca_cod not in cache_modelos:
+            if consultas >= MAX_CONSULTAS_FIPE:
+                break
+            try:
+                r_mod = requests.get(
+                    f"{URL_FIPE_MOTOS}/marcas/{marca_cod}/modelos",
+                    headers=HEADERS,
+                    timeout=20,
+                )
+                r_mod.raise_for_status()
+                consultas += 1
+                cache_modelos[marca_cod] = (r_mod.json() or {}).get("modelos") or []
+                time.sleep(0.3)
+            except Exception:
+                cache_modelos[marca_cod] = []
+
+        modelos = cache_modelos.get(marca_cod) or []
+        melhor_modelo = None
+        melhor_score = 0
+        for mod in modelos:
+            score = _pontuar_modelo_fipe(modelo_query, mod.get("nome") or "")
+            if score > melhor_score:
+                melhor_score = score
+                melhor_modelo = mod
+
+        if not melhor_modelo or melhor_score < 10:
+            continue
+
+        modelo_cod = str(melhor_modelo.get("codigo") or "")
+        chave_anos = f"{marca_cod}:{modelo_cod}"
+        if chave_anos not in cache_anos:
+            if consultas >= MAX_CONSULTAS_FIPE:
+                break
+            try:
+                r_anos = requests.get(
+                    f"{URL_FIPE_MOTOS}/marcas/{marca_cod}/modelos/{modelo_cod}/anos",
+                    headers=HEADERS,
+                    timeout=20,
+                )
+                r_anos.raise_for_status()
+                consultas += 1
+                cache_anos[chave_anos] = r_anos.json() or []
+                time.sleep(0.3)
+            except Exception:
+                cache_anos[chave_anos] = []
+
+        anos_disp = cache_anos.get(chave_anos) or []
+        ano_cod = ""
+        for item_ano in anos_disp:
+            nome_ano = str(item_ano.get("nome") or "")
+            if nome_ano.startswith(str(ano)) or (ano >= 2026 and "32000" in str(item_ano.get("codigo") or "")):
+                ano_cod = str(item_ano.get("codigo") or "")
+                break
+
+        if not ano_cod:
+            continue
+
+        chave_preco = f"{marca_cod}:{modelo_cod}:{ano_cod}"
+        if chave_preco not in cache_preco:
+            if consultas >= MAX_CONSULTAS_FIPE:
+                break
+            try:
+                r_val = requests.get(
+                    f"{URL_FIPE_MOTOS}/marcas/{marca_cod}/modelos/{modelo_cod}/anos/{ano_cod}",
+                    headers=HEADERS,
+                    timeout=20,
+                )
+                r_val.raise_for_status()
+                consultas += 1
+                valor_fipe = num((r_val.json() or {}).get("Valor"))
+                cache_preco[chave_preco] = valor_fipe
+                time.sleep(0.3)
+            except Exception:
+                cache_preco[chave_preco] = 0.0
+
+        valor_fipe = cache_preco.get(chave_preco) or 0.0
+        if valor_fipe > 0:
+            lote["fipe"] = valor_fipe
+            preenchidos += 1
+
+    print(f"[fipe] {preenchidos} lotes enriquecidos ({consultas} consultas)")
     return lotes
 
 
