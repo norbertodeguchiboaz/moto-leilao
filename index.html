@@ -146,7 +146,11 @@
 
     function gerarLinkLote(l) {
       if ((l.leiloeiro || "").toLowerCase() === "superbid") {
-        const termo = (l.titulo || l.lote || "").replace(/[^a-zA-Z0-9À-ÿ\s]/g, " ").replace(/\s+/g, " ").trim();
+        const palavras = (l.titulo || "")
+          .replace(/[^a-zA-Z0-9À-ÿ\s]/g, " ")
+          .split(/\s+/)
+          .filter(p => p.length > 2 && !["HONDA", "YAMAHA", "SUZUKI", "KAWASAKI", "BMW", "SHINERAY", "DAFRA", "HAOJUE", "TRIUMPH", "ROYAL", "ENFIELD", "BAJAJ", "SUNDOWN"].includes(p.toUpperCase()));
+        const termo = palavras.slice(0, 2).join(" ") || l.lote || "";
         return `https://www.superbid.net/categorias/carros-motos/motos/motocicletas?searchType=opened&searchTerm=${encodeURIComponent(termo)}`;
       }
       return l.url || "#";
